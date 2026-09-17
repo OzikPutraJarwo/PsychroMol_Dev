@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "psychromol"
+version = "1.0.0"
+description = "Psychrometric decision support for greenhouse environment management"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Ozik Putra Jarwo" }]
+keywords = [
+    "psychrometrics", "ashrae", "mollier", "greenhouse", "horticulture",
+    "vapour-pressure-deficit", "decision-support", "environmental-monitoring",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+app = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "sqlalchemy>=2.0",
+    "python-multipart>=0.0.9",
+]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.27",
+    "psychrolib>=2.5",
+    "ruff>=0.6",
+]
+pi = [
+    "RPi.GPIO>=0.7.1",
+    "spidev>=3.6",
+    "luma.oled>=3.13",
+]
+
+[project.urls]
+Repository = "https://github.com/OzikPutraJarwo/PsychroMol"
+
+[project.scripts]
+psychromol = "psychromol.api.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "." }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["psychromol*"]
+exclude = ["tests*", "scripts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette.*",
+    "ignore::DeprecationWarning:httpx.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
+# E501: line length is enforced by the formatter's 100 columns, not by lint.
+# C416: SQLAlchemy yields Row objects; dict() over them does not unpack the
+#       two selected columns into key/value pairs, so the comprehension is
+#       correct and dict() is a bug. Verified by the test suite.
+ignore = ["E501", "C416"]
+
+[tool.ruff.lint.per-file-ignores]
+# B007: a loop over field names asserting a property of each name.
+"tests/test_api.py" = ["B007"]

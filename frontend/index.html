@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PsychroMol</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🌱</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <button class="icon-button menu-toggle" id="menu-toggle" aria-label="Menu">
+    <span class="icon">menu</span>
+  </button>
+  <div class="brand">PsychroMol</div>
+  <button class="icon-button" id="connect-btn" aria-label="Server connection" title="Server connection">
+    <span class="icon">cable</span>
+  </button>
+  <button class="profile-chip" id="profile-chip">
+    <span class="chip-text">
+      <span class="chip-name" id="chip-name">No profile</span>
+      <span class="chip-sub" id="chip-sub">Tap to set up</span>
+    </span>
+    <span class="icon">expand_more</span>
+  </button>
+</header>
+
+<div class="shell">
+  <nav class="sidebar" id="sidebar">
+    <button class="nav-item active" data-view="dashboard">
+      <span class="icon">dashboard</span><span>Dashboard</span>
+    </button>
+    <button class="nav-item" data-view="chart">
+      <span class="icon">scatter_plot</span><span>Psychro</span>
+    </button>
+    <button class="nav-item" data-view="data">
+      <span class="icon">table_rows</span><span>Data</span>
+    </button>
+    <button class="nav-item" data-view="rules">
+      <span class="icon">rule</span><span>Rules</span>
+    </button>
+  </nav>
+  <div class="scrim" id="scrim"></div>
+
+  <main class="content">
+
+    <section class="view active" id="view-dashboard">
+      <div class="cards" id="primary-cards"></div>
+      <h2 class="section-title">Action</h2>
+      <div id="action-panel"></div>
+      <h2 class="section-title">Charts</h2>
+      <div class="chart-columns">
+        <div class="panel">
+          <div class="panel-head">
+            <span id="mini-chart-title">Psychrometric</span>
+            <div class="switch" id="mini-switch">
+              <button class="on" data-kind="psychrometric">Psychrometric</button>
+              <button data-kind="mollier">Mollier</button>
+            </div>
+          </div>
+          <div class="chart-scroll"><div id="mini-chart"></div></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span>Last 24 hours</span></div>
+          <div class="chart-scroll"><div id="mini-trend"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-chart">
+      <div class="panel">
+        <div class="panel-head">
+          <div class="switch" id="full-switch">
+            <button class="on" data-kind="psychrometric">Psychrometric</button>
+            <button data-kind="mollier">Mollier</button>
+          </div>
+          <button class="ghost" id="chart-reset">
+            <span class="icon">restart_alt</span> Reset view
+          </button>
+        </div>
+        <div class="chart-scroll"><div id="full-chart"></div></div>
+        <div class="row playback-row">
+          <button class="ghost" id="history-play">
+            <span class="icon">play_arrow</span> Play history
+          </button>
+          <input type="range" id="history-scrub" min="0" max="0" value="0">
+          <span class="hint" id="history-scrub-time"></span>
+        </div>
+        <p class="hint">Scroll to zoom in, drag to pan; hover to read a point. Zooming out stops at the full chart. The shaded area is where this crop wants to be, and the trail is the last 24 hours.</p>
+      </div>
+      <h2 class="section-title">Current point</h2>
+      <div id="point-detail"></div>
+    </section>
+
+    <section class="view" id="view-data">
+      <div class="panel">
+        <div class="panel-head">
+          <div class="range-controls">
+            <div class="switch" id="range-switch">
+              <button class="on" data-hours="24">24 h</button>
+              <button data-hours="72">3 d</button>
+              <button data-hours="168">7 d</button>
+              <button data-custom="1">Custom</button>
+            </div>
+            <div class="custom-range" id="custom-range" hidden>
+              <input type="datetime-local" id="range-start">
+              <span>to</span>
+              <input type="datetime-local" id="range-end">
+              <button class="primary" id="range-apply">Apply</button>
+            </div>
+          </div>
+          <div class="row">
+            <button class="ghost" id="columns-open">
+              <span class="icon">tune</span> Columns
+            </button>
+            <button class="primary" id="download-open">
+              <span class="icon">download</span> Download
+            </button>
+          </div>
+        </div>
+        <div class="chart-scroll"><div id="data-trend"></div></div>
+        <div class="table-scroll"><table id="data-table"></table></div>
+        <p class="hint" id="data-summary"></p>
+      </div>
+    </section>
+
+    <section class="view" id="view-rules">
+      <div class="panel">
+        <div class="panel-head">
+          <span>Rules run in order. The first matching rule sets the headline.</span>
+          <div class="row">
+            <button class="ghost" id="rules-reset">
+              <span class="icon">restart_alt</span> Restore defaults
+            </button>
+            <button class="primary" id="rule-add">
+              <span class="icon">add</span> New rule
+            </button>
+          </div>
+        </div>
+        <div id="rules-list"></div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div class="modal" id="profile-modal" hidden>
+  <div class="modal-card wide" id="profile-modal-card"></div>
+</div>
+
+<div class="modal" id="rule-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="rule-modal-title">New rule</h2>
+      <button class="icon-button" data-close><span class="icon">close</span></button>
+    </div>
+    <div class="modal-body" id="rule-form"></div>
+  </div>
+</div>
+
+<div class="modal" id="download-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>Download data</h2>
+      <button class="icon-button" data-close><span class="icon">close</span></button>
+    </div>
+    <div class="modal-body" id="download-form"></div>
+  </div>
+</div>
+
+<div class="modal" id="columns-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>Show columns</h2>
+      <button class="icon-button" data-close><span class="icon">close</span></button>
+    </div>
+    <div class="modal-body" id="columns-form"></div>
+  </div>
+</div>
+
+<div class="modal" id="connect-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>Server connection</h2>
+      <button class="icon-button" data-close><span class="icon">close</span></button>
+    </div>
+    <div class="modal-body">
+      <p class="tip">PsychroMol needs the address of the server that stores your readings.</p>
+      <div class="field-row">
+        <label class="field">Server address<input type="text" id="connect-url" placeholder="http://192.168.1.50:8888/api/v1"></label>
+      </div>
+      <p class="hint" id="connect-status"></p>
+      <div class="form-actions">
+        <button class="primary" id="connect-save">Connect</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

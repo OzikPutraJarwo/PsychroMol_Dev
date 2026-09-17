@@ -1,0 +1,36 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Configuration and secrets — never commit these
+.env
+*.key
+
+# Databases. The schema is in code; the data is not source.
+data/*.db
+data/*.db-shm
+data/*.db-wal
+logs/
+
+# Research datasets are deliberately NOT committed: they may carry licensing or
+# collaboration constraints, and a repository is the wrong place for them. Keep
+# them here and record their provenance in docs/research-notes.md. The README
+# explaining that is tracked, so a fresh clone knows what the directory is for.
+data/real/*
+!data/real/README.md
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
