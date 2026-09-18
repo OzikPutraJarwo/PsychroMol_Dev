@@ -1,446 +1,250 @@
 from __future__ import annotations
 
-import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from conftest import LINKED, PROFILE
 
-from psychromol.defaults import SAMPLE_CROP, SAMPLE_FACILITY
-from psychromol.rules import EQUIPMENT, METRICS
+from psychromol import fetcher
+from psychromol.db.models import Reading, Rule
 
-CROP = {
-    "name": "Tomato",
-    "temperature_min": 18.0,
-    "temperature_max": 28.0,
-    "humidity_min": 60.0,
-    "humidity_max": 80.0,
-    "extra_targets": [{"metric": "vpd", "min": 0.5, "max": 1.2}],
+START = datetime(2026, 9, 17, 0, 0, tzinfo=timezone.utc)
+
+RULE = {
+    "name": "Hot and humid",
+    "conditions": {"temperature": "HIGH", "humidity": "HIGH", "vpd": "ANY"},
+    "severity": "critical",
+    "recommendation": "Ventilate.",
+    "reference": "BC Ministry of Agriculture (2015), p. 3.",
+    "priority": 10,
 }
-FACILITY = {"name": "House 1", "altitude_m": 30.0, "equipment": ["roof_vent", "heater"]}
 
-def make_profile(client, crop=None, facility=None, **extra):
-    crop_id = client.post("/api/v1/crops", json=crop or CROP).json()["id"]
-    facility_id = client.post("/api/v1/facilities", json=facility or FACILITY).json()["id"]
-    body = {"name": "Tomato House", "crop_id": crop_id, "facility_id": facility_id, **extra}
-    return client.post("/api/v1/profiles", json=body).json()
 
-def add_readings(client, profile_id, rows):
-    return client.post(
-        f"/api/v1/profiles/{profile_id}/paste",
-        json={"text": json.dumps(rows), "filename": "x.json"},
-    )
+def create(client, **changes):
+    response = client.post("/api/v1/profiles", json={**PROFILE, **changes})
+    assert response.status_code == 201, response.text
+    return response.json()
 
-def test_health_answers(client):
+
+def add_readings(settings, profile_id, count, step_seconds=60):
+    from psychromol.db.session import get_sessionmaker
+
+    session = get_sessionmaker()()
+    try:
+        for index in range(count):
+            session.add(
+                Reading(
+                    profile_id=profile_id,
+                    measured_at=START + timedelta(seconds=index * step_seconds),
+                    received_at=START + timedelta(seconds=index * step_seconds),
+                    temperature_c=20.0 + index * 0.01,
+                    relative_humidity_percent=70.0,
+                )
+            )
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_health(client):
     assert client.get("/api/v1/health").json()["status"] == "ok"
 
-def test_meta_offers_the_whole_vocabulary(client):
-    meta = client.get("/api/v1/meta").json()
-    assert {item["id"] for item in meta["metrics"]} == set(METRICS)
-    assert {item["id"] for item in meta["equipment"]} == set(EQUIPMENT)
-    assert meta["operators"] == [">", ">=", "<", "<="]
-    assert meta["severities"] == ["info", "warning", "critical"]
 
+def test_a_profile_round_trips(client):
+    created = create(client, **LINKED, poll_interval_seconds=5)
+    assert created["stage"] == "vegetative"
+    assert created["pressure_mode"] == "standard"
+    assert created["rules_seeded"] is False
+    assert created["field_temperature"] == "/temperature"
+    assert client.get(f"/api/v1/profiles/{created['id']}").json() == created
+    assert [profile["id"] for profile in client.get("/api/v1/profiles").json()] == [created["id"]]
 
-def test_meta_offers_the_displayable_fields_and_their_default(client):
-    from psychromol.api.routers.data import FIELDS
-
-    meta = client.get("/api/v1/meta").json()
-    assert {item["id"] for item in meta["fields"]} == set(FIELDS)
-    assert all(item["label"] and item["unit"] is not None for item in meta["fields"])
-    assert meta["default_display_fields"] == ["temperature", "relative_humidity"]
-
-def test_the_rule_catalogue_is_seeded_on_first_start(client):
-    rules = client.get("/api/v1/rules").json()
-    assert len(rules) == 11
-    assert rules[0]["priority"] <= rules[-1]["priority"]
-
-def test_a_crop_round_trips(client):
-    created = client.post("/api/v1/crops", json=CROP).json()
-    assert created["targets"]["temperature"] == {"min": 18.0, "max": 28.0}
-    assert created["targets"]["vpd"] == {"min": 0.5, "max": 1.2}
-
-    updated = client.put(
-        f"/api/v1/crops/{created['id']}", json={**CROP, "name": "Cherry tomato"}
-    ).json()
-    assert updated["name"] == "Cherry tomato"
-    assert [crop["name"] for crop in client.get("/api/v1/crops").json()] == ["Cherry tomato"]
 
 @pytest.mark.parametrize(
-    "field, value",
-    [("temperature_max", 10.0), ("humidity_max", 10.0), ("humidity_min", 150.0)],
-)
-def test_an_impossible_crop_band_is_refused(client, field, value):
-    response = client.post("/api/v1/crops", json={**CROP, field: value})
-    assert response.status_code == 422
-
-def test_a_facility_keeps_only_known_equipment(client):
-    response = client.post(
-        "/api/v1/facilities", json={**FACILITY, "equipment": ["roof_vent", "teleporter"]}
-    )
-    assert response.status_code == 422
-    assert "teleporter" in response.json()["detail"]
-
-def test_equipment_comes_back_in_a_stable_order(client):
-    created = client.post(
-        "/api/v1/facilities", json={**FACILITY, "equipment": ["heater", "fan", "roof_vent"]}
-    ).json()
-    assert created["equipment"] == ["fan", "roof_vent", "heater"]
-
-def test_a_crop_still_in_use_cannot_be_deleted(client):
-    profile = make_profile(client)
-    response = client.delete(f"/api/v1/crops/{profile['crop_id']}")
-    assert response.status_code == 409
-    assert "profile" in response.json()["detail"]
-
-def test_a_facility_still_in_use_cannot_be_deleted(client):
-    profile = make_profile(client)
-    assert client.delete(f"/api/v1/facilities/{profile['facility_id']}").status_code == 409
-
-def test_a_profile_needs_a_crop_and_a_facility_that_exist(client):
-    response = client.post(
-        "/api/v1/profiles", json={"name": "X", "crop_id": 99, "facility_id": 99}
-    )
-    assert response.status_code == 422
-
-def test_the_first_profile_becomes_the_default(client):
-    first = make_profile(client)
-    assert first["is_default"] is True
-
-def test_a_profile_defaults_to_a_60_second_poll_interval(client):
-    profile = make_profile(client)
-    assert profile["poll_interval_seconds"] == 60
-
-def test_a_profiles_poll_interval_round_trips(client):
-    profile = make_profile(client, poll_interval_seconds=5)
-    assert profile["poll_interval_seconds"] == 5
-    updated = client.put(
-        f"/api/v1/profiles/{profile['id']}",
-        json={
-            "name": profile["name"],
-            "crop_id": profile["crop_id"],
-            "facility_id": profile["facility_id"],
-            "poll_interval_seconds": 1,
-        },
-    ).json()
-    assert updated["poll_interval_seconds"] == 1
-
-@pytest.mark.parametrize("value", [0, -5, 3601])
-def test_an_out_of_range_poll_interval_is_refused(client, value):
-    existing = make_profile(client)
-    response = client.post(
-        "/api/v1/profiles",
-        json={
-            "name": "X",
-            "crop_id": existing["crop_id"],
-            "facility_id": existing["facility_id"],
-            "poll_interval_seconds": value,
-        },
-    )
-    assert response.status_code == 422
-
-def test_only_one_profile_is_default(client):
-    first = make_profile(client)
-    second = client.post(
-        "/api/v1/profiles",
-        json={
-            "name": "Second",
-            "crop_id": first["crop_id"],
-            "facility_id": first["facility_id"],
-            "is_default": True,
-        },
-    ).json()
-    profiles = {entry["id"]: entry for entry in client.get("/api/v1/profiles").json()}
-    assert profiles[second["id"]]["is_default"] is True
-    assert profiles[first["id"]]["is_default"] is False
-
-def test_deleting_a_profile_takes_its_readings_with_it(client):
-    profile = make_profile(client)
-    add_readings(client, profile["id"], [
-        {"timestamp": "2026-09-14T03:00:00Z", "temperature": 24, "humidity": 70}
-    ])
-    assert client.delete(f"/api/v1/profiles/{profile['id']}").status_code == 204
-    assert client.get(f"/api/v1/profiles/{profile['id']}/current").status_code == 404
-
-
-def test_deleting_a_profile_also_removes_its_own_crop_and_facility(client):
-    profile = make_profile(client)
-    assert client.delete(f"/api/v1/profiles/{profile['id']}").status_code == 204
-    assert client.get("/api/v1/crops").json() == []
-    assert client.get("/api/v1/facilities").json() == []
-
-
-def test_deleting_a_profile_keeps_a_crop_or_facility_still_used_elsewhere(client):
-    first = make_profile(client)
-    second = client.post(
-        "/api/v1/profiles",
-        json={
-            "name": "Second",
-            "crop_id": first["crop_id"],
-            "facility_id": first["facility_id"],
-        },
-    ).json()
-    client.delete(f"/api/v1/profiles/{first['id']}")
-    assert any(c["id"] == second["crop_id"] for c in client.get("/api/v1/crops").json())
-    assert any(f["id"] == second["facility_id"] for f in client.get("/api/v1/facilities").json())
-
-def test_a_data_link_must_be_http(client):
-    profile = make_profile(client)
-    response = client.put(
-        f"/api/v1/profiles/{profile['id']}",
-        json={
-            "name": profile["name"],
-            "crop_id": profile["crop_id"],
-            "facility_id": profile["facility_id"],
-            "source_url": "file:///etc/passwd",
-        },
-    )
-    assert response.status_code == 422
-
-def test_current_reports_the_air_and_the_advice(client):
-    profile = make_profile(client)
-    add_readings(client, profile["id"], [
-        {"timestamp": "2026-09-14T03:00:00Z", "temperature": 34, "humidity": 88}
-    ])
-    payload = client.get(f"/api/v1/profiles/{profile['id']}/current").json()
-
-    assert payload["temperature_c"] == pytest.approx(34.0)
-    assert payload["assessment"]["status"] == "critical"
-    assert payload["assessment"]["headline"] == "Hot and humid"
-    assert payload["profile"]["crop"]["name"] == "Tomato"
-    first = payload["assessment"]["matches"][0]
-    assert first["conditions"][0]["actual"] == pytest.approx(34.0)
-    assert first["recommendation"]
-
-def test_current_says_so_when_nothing_has_arrived(client):
-    profile = make_profile(client)
-    assert client.get(f"/api/v1/profiles/{profile['id']}/current").status_code == 404
-
-def test_advice_marks_equipment_the_facility_lacks(client):
-    profile = make_profile(
-        client, facility={"name": "Bare", "altitude_m": 0, "equipment": []}
-    )
-    add_readings(client, profile["id"], [
-        {"timestamp": "2026-09-14T03:00:00Z", "temperature": 34, "humidity": 88}
-    ])
-    matches = client.get(
-        f"/api/v1/profiles/{profile['id']}/current"
-    ).json()["assessment"]["matches"]
-    assert all(match["equipment_missing"] for match in matches)
-
-@pytest.mark.parametrize("kind", ["psychrometric", "mollier"])
-def test_the_chart_covers_the_full_default_range(client, kind):
-    profile = make_profile(client)
-    chart = client.get(f"/api/v1/profiles/{profile['id']}/chart?kind={kind}").json()
-    assert chart["curves"]
-    if kind == "psychrometric":
-        assert chart["x_axis"]["min"] == -20.0
-        assert chart["x_axis"]["max"] == 50.0
-        assert chart["y_axis"]["min"] == 0.0
-        assert chart["y_axis"]["max"] == 50.0
-
-@pytest.mark.parametrize("kind", ["psychrometric", "mollier"])
-def test_the_chart_shades_the_crops_target_zone(client, kind):
-    profile = make_profile(client)
-    chart = client.get(f"/api/v1/profiles/{profile['id']}/chart?kind={kind}").json()
-    zones = [curve for curve in chart["curves"] if curve["family"] == "target_zone"]
-    assert len(zones) == 1
-    points = zones[0]["points"]
-    assert points[0] == points[-1]
-    assert len(points) > 4
-
-
-def test_a_narrower_crop_target_gives_a_smaller_zone(client):
-    narrow = make_profile(client, crop={**CROP, "name": "Narrow", "temperature_min": 20.0, "temperature_max": 22.0})
-    wide = make_profile(client, crop={**CROP, "name": "Wide", "temperature_min": 5.0, "temperature_max": 45.0},
-                         facility=FACILITY)
-    narrow_zone = next(
-        c for c in client.get(f"/api/v1/profiles/{narrow['id']}/chart").json()["curves"]
-        if c["family"] == "target_zone"
-    )
-    wide_zone = next(
-        c for c in client.get(f"/api/v1/profiles/{wide['id']}/chart").json()["curves"]
-        if c["family"] == "target_zone"
-    )
-    narrow_ts = [p[0] for p in narrow_zone["points"]]
-    wide_ts = [p[0] for p in wide_zone["points"]]
-    assert max(narrow_ts) - min(narrow_ts) < max(wide_ts) - min(wide_ts)
-
-
-def test_an_unknown_chart_kind_is_refused(client):
-    profile = make_profile(client)
-    assert client.get(
-        f"/api/v1/profiles/{profile['id']}/chart?kind=pie"
-    ).status_code == 422
-
-def test_the_chart_follows_the_facility_altitude(client):
-    sea = make_profile(client)
-    high = make_profile(
-        client,
-        crop={**CROP, "name": "Other"},
-        facility={"name": "Hill", "altitude_m": 1500.0, "equipment": []},
-    )
-    a = client.get(f"/api/v1/profiles/{sea['id']}/chart").json()["pressure_kpa"]
-    b = client.get(f"/api/v1/profiles/{high['id']}/chart").json()["pressure_kpa"]
-    assert b < a - 10
-
-def test_readings_default_to_the_last_day(client):
-    from datetime import datetime, timedelta, timezone
-
-    now = datetime.now(timezone.utc)
-    profile = make_profile(client)
-    add_readings(client, profile["id"], [
-        {"timestamp": (now - timedelta(hours=1)).isoformat(), "temperature": 24, "humidity": 70},
-        {"timestamp": (now - timedelta(days=3)).isoformat(), "temperature": 20, "humidity": 60},
-    ])
-    payload = client.get(f"/api/v1/profiles/{profile['id']}/readings").json()
-    assert payload["count"] == 1
-
-    wider = client.get(f"/api/v1/profiles/{profile['id']}/readings?hours=168").json()
-    assert wider["count"] == 2
-
-def test_readings_can_be_narrowed_to_chosen_fields(client):
-    from datetime import datetime, timezone
-
-    profile = make_profile(client)
-    add_readings(client, profile["id"], [
-        {"timestamp": datetime.now(timezone.utc).isoformat(), "temperature": 24, "humidity": 70}
-    ])
-    payload = client.get(
-        f"/api/v1/profiles/{profile['id']}/readings?fields=temperature&fields=vpd"
-    ).json()
-    assert [field["id"] for field in payload["fields"]] == ["temperature", "vpd"]
-    assert set(payload["readings"][0]) == {"measured_at", "temperature_c", "vpd_kpa"}
-
-@pytest.mark.parametrize("fmt, media", [("csv", "text/csv"), ("json", "application/json")])
-def test_export_returns_a_file(client, fmt, media):
-    from datetime import datetime, timezone
-
-    profile = make_profile(client)
-    add_readings(client, profile["id"], [
-        {"timestamp": datetime.now(timezone.utc).isoformat(), "temperature": 24, "humidity": 70}
-    ])
-    response = client.get(f"/api/v1/profiles/{profile['id']}/export?format={fmt}")
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith(media)
-    assert "attachment" in response.headers["content-disposition"]
-    assert "·" not in response.headers["content-disposition"]
-
-def test_an_unknown_export_format_is_refused(client):
-    profile = make_profile(client)
-    assert client.get(
-        f"/api/v1/profiles/{profile['id']}/export?format=pdf"
-    ).status_code == 422
-
-def test_a_csv_upload_is_accepted(client):
-    profile = make_profile(client)
-    response = client.post(
-        f"/api/v1/profiles/{profile['id']}/upload",
-        files={"file": ("readings.csv", "time,temp,rh\n2026-09-14 03:00,24,70\n", "text/csv")},
-    )
-    assert response.json()["stored"] == 1
-
-def test_an_unreadable_upload_says_why(client):
-    profile = make_profile(client)
-    response = client.post(
-        f"/api/v1/profiles/{profile['id']}/upload",
-        files={"file": ("notes.txt", "hello there", "text/plain")},
-    )
-    assert response.status_code == 422
-    assert response.json()["detail"]
-
-def test_a_rule_round_trips(client):
-    body = {
-        "name": "Hot and humid",
-        "conditions": [
-            {"metric": "temperature", "operator": ">", "target": "temperature.max"},
-            {"metric": "relative_humidity", "operator": ">", "value": 85},
-        ],
-        "severity": "critical",
-        "recommendation": "Ventilate first.",
-        "requires_equipment": "roof_vent",
-        "priority": 5,
-    }
-    created = client.post("/api/v1/rules", json=body).json()
-    assert len(created["conditions"]) == 2
-    assert created["conditions"][0]["target"] == "temperature.max"
-    assert "value" not in created["conditions"][0]
-
-    updated = client.put(
-        f"/api/v1/rules/{created['id']}", json={**body, "enabled": False}
-    ).json()
-    assert updated["enabled"] is False
-    assert client.delete(f"/api/v1/rules/{created['id']}").status_code == 204
-
-@pytest.mark.parametrize(
-    "broken",
+    ("changes", "message"),
     [
-        {"conditions": [{"metric": "colour", "operator": ">", "value": 1}]},
-        {"conditions": [{"metric": "temperature", "operator": "~", "value": 1}]},
-        {"conditions": [{"metric": "temperature", "operator": ">"}]},
-        {"severity": "disastrous"},
-        {"requires_equipment": "teleporter"},
+        ({"temperature_min": 30}, "temperature minimum must be below"),
+        ({"humidity_max": 50}, "humidity minimum must be below"),
+        ({"temperature_reference": "   "}, "temperature_reference"),
+        ({"vpd_min": 0.4}, "both a minimum and a maximum"),
+        ({"vpd_min": 0.4, "vpd_max": 0.9}, "needs its reference"),
+        ({"vpd_min": 0.9, "vpd_max": 0.4, "vpd_reference": "Trial"}, "VPD minimum must be below"),
+        ({"pressure_mode": "fixed"}, "needs a value in kPa"),
+        ({"pressure_mode": "fixed", "pressure_kpa": 101325}, "pressure_kpa"),
+        ({"pressure_mode": "field"}, "needs its field"),
+        ({"source_url": "https://example.test/a.json"}, "choose the temperature and humidity"),
+        ({"source_url": "ftp://example.test/a.json"}, "http:// or https://"),
+        ({**LINKED, "field_temperature": "temperature"}, "must start with /"),
+        ({"stage": "seedling"}, "stage"),
+        ({"humidity_max": 120}, "humidity_max"),
+        ({"surprise": 1}, "surprise"),
     ],
 )
-def test_a_broken_rule_is_refused_with_a_reason(client, broken):
-    body = {
-        "name": "Test",
-        "conditions": [{"metric": "temperature", "operator": ">", "value": 30}],
-        "severity": "warning",
-        "recommendation": "x",
-        **broken,
+def test_an_invalid_profile_is_refused_with_the_reason(client, changes, message):
+    response = client.post("/api/v1/profiles", json={**PROFILE, **changes})
+    assert response.status_code == 422
+    assert message in response.text
+
+
+def test_a_custom_vpd_band_keeps_its_reference_and_removing_it_clears_the_reference(client):
+    created = create(client, vpd_min=0.4, vpd_max=0.9, vpd_reference="Own trial")
+    assert (created["vpd_min"], created["vpd_max"], created["vpd_reference"]) == (0.4, 0.9, "Own trial")
+    updated = client.put(
+        f"/api/v1/profiles/{created['id']}", json={**PROFILE, "vpd_reference": "Own trial"}
+    ).json()
+    assert (updated["vpd_min"], updated["vpd_max"], updated["vpd_reference"]) == (None, None, None)
+
+
+def test_changing_the_source_clears_the_last_poll(client, profile, session):
+    profile.last_polled_at = START
+    profile.last_poll_error = "temperature: nothing at /temperature"
+    session.commit()
+    body = {**PROFILE, **LINKED, "field_temperature": "/air/t"}
+    updated = client.put(f"/api/v1/profiles/{profile.id}", json=body).json()
+    assert updated["last_polled_at"] is None and updated["last_poll_error"] is None
+
+    renamed = client.put(f"/api/v1/profiles/{profile.id}", json={**body, "name": "Renamed"}).json()
+    assert renamed["name"] == "Renamed"
+
+
+def test_deleting_a_profile_deletes_its_readings_and_rules(client, settings):
+    created = create(client)
+    add_readings(settings, created["id"], 3)
+    client.put(f"/api/v1/profiles/{created['id']}/rules", json=[RULE])
+    assert client.delete(f"/api/v1/profiles/{created['id']}").status_code == 204
+    assert client.get(f"/api/v1/profiles/{created['id']}").status_code == 404
+
+    from psychromol.db.session import get_sessionmaker
+
+    session = get_sessionmaker()()
+    try:
+        assert session.query(Reading).count() == 0
+        assert session.query(Rule).count() == 0
+    finally:
+        session.close()
+
+
+def test_readings_are_paged_newest_first_with_a_total(client, settings):
+    created = create(client)
+    add_readings(settings, created["id"], 25)
+    url = f"/api/v1/profiles/{created['id']}/readings"
+    page = client.get(url, params={"limit": 10, "offset": 10}).json()
+    assert page["total"] == 25
+    assert [row["measured_at"] for row in page["items"]][0] == "2026-09-17T00:14:00.000Z"
+    assert len(page["items"]) == 10
+
+    oldest = client.get(url, params={"limit": 2, "order": "asc"}).json()["items"]
+    assert oldest[0]["measured_at"] == "2026-09-17T00:00:00.000Z"
+    assert set(oldest[0]) == {"id", "measured_at", "received_at", "temperature_c", "relative_humidity_percent", "pressure_kpa"}
+
+
+def test_readings_filter_by_time_and_a_naive_time_is_utc(client, settings):
+    created = create(client)
+    add_readings(settings, created["id"], 25)
+    url = f"/api/v1/profiles/{created['id']}/readings"
+    found = client.get(url, params={"start": "2026-09-17T00:05:00", "end": "2026-09-17T07:09:00+07:00"}).json()
+    assert found["total"] == 5
+    assert [row["measured_at"][11:16] for row in found["items"]] == ["00:09", "00:08", "00:07", "00:06", "00:05"]
+
+
+def test_a_long_range_is_thinned_to_real_readings_including_the_first_and_last(client, settings):
+    created = create(client)
+    add_readings(settings, created["id"], 1001)
+    body = client.get(f"/api/v1/profiles/{created['id']}/readings", params={"max_points": 100}).json()
+    items = body["items"]
+    assert body["total"] == 1001
+    assert len(items) <= 101
+    assert items[0]["measured_at"] == "2026-09-17T00:00:00.000Z"
+    assert items[-1]["measured_at"] == (START + timedelta(minutes=1000)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    times = [item["measured_at"] for item in items]
+    assert times == sorted(times)
+
+    small = client.get(f"/api/v1/profiles/{created['id']}/readings", params={"max_points": 5000}).json()
+    assert len(small["items"]) == 1001
+
+
+def test_the_latest_reading(client, settings):
+    created = create(client)
+    url = f"/api/v1/profiles/{created['id']}/readings/latest"
+    assert client.get(url).json() is None
+    add_readings(settings, created["id"], 3)
+    assert client.get(url).json()["measured_at"] == "2026-09-17T00:02:00.000Z"
+
+
+def test_refresh_fetches_and_stores_through_the_profiles_mapping(client, monkeypatch):
+    created = create(client, **LINKED)
+    document = {"timestamp": "2026-09-17T09:10:04Z", "temperature": 27.0, "humidity": 44.6}
+    monkeypatch.setattr(fetcher, "fetch_json", lambda url: document)
+    url = f"/api/v1/profiles/{created['id']}/refresh"
+    first = client.post(url).json()
+    assert first["stored"] is True and first["error"] is None
+    assert first["latest"]["temperature_c"] == 27.0
+    assert first["profile"]["last_polled_at"] is not None
+
+    second = client.post(url).json()
+    assert second["stored"] is False and second["latest"]["id"] == first["latest"]["id"]
+
+
+def test_rules_belong_to_one_profile(client):
+    one = create(client)
+    two = create(client, name="Second house")
+    replaced = client.put(f"/api/v1/profiles/{one['id']}/rules", json=[RULE, {**RULE, "name": "Other", "priority": 5}])
+    assert replaced.status_code == 200
+    assert [rule["name"] for rule in replaced.json()] == ["Other", "Hot and humid"]
+    assert client.get(f"/api/v1/profiles/{one['id']}").json()["rules_seeded"] is True
+    assert client.get(f"/api/v1/profiles/{two['id']}/rules").json() == []
+
+    added = client.post(f"/api/v1/profiles/{two['id']}/rules", json=RULE).json()
+    assert added["conditions"] == RULE["conditions"] and added["profile_id"] == two["id"]
+    changed = client.put(f"/api/v1/rules/{added['id']}", json={**RULE, "enabled": False, "conditions": {"vpd": "LOW"}}).json()
+    assert changed["enabled"] is False
+    assert changed["conditions"] == {"temperature": "ANY", "humidity": "ANY", "vpd": "LOW"}
+    assert client.delete(f"/api/v1/rules/{added['id']}").status_code == 204
+    assert client.delete(f"/api/v1/rules/{added['id']}").status_code == 404
+    assert client.get(f"/api/v1/profiles/{two['id']}").json()["rules_seeded"] is False
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"reference": ""},
+        {"severity": "urgent"},
+        {"conditions": {"temperature": "WARM"}},
+        {"priority": "first"},
+    ],
+)
+def test_an_invalid_rule_is_refused(client, changes):
+    created = create(client)
+    response = client.post(f"/api/v1/profiles/{created['id']}/rules", json={**RULE, **changes})
+    assert response.status_code == 422
+
+
+def test_an_unknown_profile_is_404(client):
+    for method, url in (
+        ("get", "/api/v1/profiles/99"),
+        ("get", "/api/v1/profiles/99/readings"),
+        ("get", "/api/v1/profiles/99/rules"),
+        ("post", "/api/v1/profiles/99/refresh"),
+        ("delete", "/api/v1/profiles/99"),
+    ):
+        assert getattr(client, method)(url).status_code == 404, url
+
+
+def test_the_source_proxy_returns_the_document_or_the_reason(client, monkeypatch):
+    monkeypatch.setattr(fetcher, "fetch_json", lambda url: {"temperature": 21})
+    assert client.get("/api/v1/sources/fetch", params={"url": "https://example.test/a.json"}).json() == {
+        "ok": True, "document": {"temperature": 21}, "error": None,
     }
-    response = client.post("/api/v1/rules", json=body)
-    assert response.status_code == 422
-    assert response.json()["detail"]
 
-def test_a_rule_needs_at_least_one_condition(client):
-    response = client.post(
-        "/api/v1/rules", json={"name": "Empty", "conditions": [], "severity": "warning"}
-    )
-    assert response.status_code == 422
+    def broken(url):
+        raise fetcher.SourceError("the source returned HTTP 500")
 
-def test_rules_can_be_restored_to_the_defaults(client):
-    for rule in client.get("/api/v1/rules").json():
-        client.delete(f"/api/v1/rules/{rule['id']}")
-    assert client.get("/api/v1/rules").json() == []
+    monkeypatch.setattr(fetcher, "fetch_json", broken)
+    body = client.get("/api/v1/sources/fetch", params={"url": "https://example.test/a.json"}).json()
+    assert body == {"ok": False, "document": None, "error": "the source returned HTTP 500"}
 
-    restored = client.post("/api/v1/rules/reset").json()
-    assert len(restored) == 11
-    assert len(client.get("/api/v1/rules").json()) == 11
 
-def test_editing_a_rule_changes_the_advice_immediately(client):
-    profile = make_profile(client)
-    add_readings(client, profile["id"], [
-        {"timestamp": "2026-09-14T03:00:00Z", "temperature": 24, "humidity": 70}
-    ])
-    before = client.get(f"/api/v1/profiles/{profile['id']}/current").json()
-    assert before["assessment"]["status"] == "ok"
-
-    client.post("/api/v1/rules", json={
-        "name": "Anything above freezing",
-        "conditions": [{"metric": "temperature", "operator": ">", "value": 0}],
-        "severity": "info",
-        "recommendation": "Just checking.",
-        "priority": 1,
-    })
-    after = client.get(f"/api/v1/profiles/{profile['id']}/current").json()
-    assert after["assessment"]["status"] == "info"
-    assert after["assessment"]["headline"] == "Anything above freezing"
-
-def test_editing_the_crop_changes_the_advice_immediately(client):
-    profile = make_profile(client)
-    add_readings(client, profile["id"], [
-        {"timestamp": "2026-09-14T03:00:00Z", "temperature": 26, "humidity": 70}
-    ])
-    assert client.get(
-        f"/api/v1/profiles/{profile['id']}/current"
-    ).json()["assessment"]["status"] == "ok"
-
-    client.put(f"/api/v1/crops/{profile['crop_id']}", json={**CROP, "temperature_max": 24.0})
-    after = client.get(f"/api/v1/profiles/{profile['id']}/current").json()
-    assert after["assessment"]["status"] != "ok"
-
-def test_the_sample_crop_and_facility_are_valid_input(client):
-    crop = client.post("/api/v1/crops", json=SAMPLE_CROP)
-    facility = client.post("/api/v1/facilities", json=SAMPLE_FACILITY)
-    assert crop.status_code == 201
-    assert facility.status_code == 201
+def test_the_frontend_is_served_at_the_root(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "PsychroMol" in response.text

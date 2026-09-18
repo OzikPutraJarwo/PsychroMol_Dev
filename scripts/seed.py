@@ -11,67 +11,70 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from psychromol.config import get_settings
 from psychromol.db.repository import Repository
 from psychromol.db.session import create_all, get_sessionmaker, init_engine
-from psychromol.defaults import DEFAULT_RULES, SAMPLE_CROP, SAMPLE_FACILITY
-from psychromol.ingest import Sample
-from psychromol.pipeline import Pipeline
 
 DAYS = 7
 STEP_MINUTES = 10
 
-def build_samples(now: datetime) -> list[Sample]:
-    random.seed(20260914)
-    samples: list[Sample] = []
-    start = now - timedelta(days=DAYS)
-    steps = int(DAYS * 24 * 60 / STEP_MINUTES)
-    for index in range(steps):
-        moment = start + timedelta(minutes=index * STEP_MINUTES)
-        hour = moment.hour + moment.minute / 60.0
-        day = index * STEP_MINUTES / (24 * 60)
+EXAMPLE = {
+    "name": "Example · synthetic data",
+    "crop_name": "Tomato",
+    "stage": "vegetative",
+    "temperature_min": 17.0,
+    "temperature_max": 27.0,
+    "temperature_reference": (
+        "Shamshiri et al. (2018), p. 289. “Greenhouse crops are mostly warm-season crops which are "
+        "adapted to optimal air temperatures between 17-27°C, with the lower and upper marginal "
+        "temperature of 10 and 35°C (Kittas et al., 2005).”"
+    ),
+    "humidity_min": 60.0,
+    "humidity_max": 90.0,
+    "humidity_reference": (
+        "Shamshiri et al. (2018), p. 290. “For most greenhouse tomato varieties, relative humidity "
+        "range between 60-90% is considered appropriate by ASABE (2015) standards.”"
+    ),
+}
 
-        daily = math.sin((hour - 9.0) / 24.0 * 2 * math.pi)
-        seasonal = 0.8 * math.sin(day / DAYS * 2 * math.pi)
-        temperature = 22.5 + 6.5 * daily + seasonal + random.gauss(0, 0.35)
-        humidity = 72.0 - 17.0 * daily + random.gauss(0, 2.0)
-        humidity = min(97.0, max(32.0, humidity))
-        samples.append(Sample(moment, round(temperature, 2), round(humidity, 1)))
-    return samples
+
+def synthetic(now: datetime) -> list[dict]:
+    random.seed(20260917)
+    start = now - timedelta(days=DAYS)
+    rows = []
+    for index in range(int(DAYS * 24 * 60 / STEP_MINUTES)):
+        moment = start + timedelta(minutes=index * STEP_MINUTES)
+        daily = math.sin((moment.hour + moment.minute / 60 - 9) / 24 * 2 * math.pi)
+        temperature = 22.5 + 6.5 * daily + random.gauss(0, 0.35)
+        humidity = min(97.0, max(32.0, 72.0 - 17.0 * daily + random.gauss(0, 2.0)))
+        rows.append(
+            {
+                "measured_at": moment,
+                "received_at": moment,
+                "temperature_c": round(temperature, 2),
+                "relative_humidity_percent": round(humidity, 1),
+                "pressure_kpa": None,
+            }
+        )
+    return rows
+
 
 def main() -> int:
     settings = get_settings()
     init_engine(settings)
     create_all()
-
     session = get_sessionmaker()()
     try:
         repository = Repository(session)
-        if not repository.list_rules():
-            repository.replace_rules(DEFAULT_RULES)
-
-        crop = repository.create_crop(**SAMPLE_CROP)
-        facility = repository.create_facility(**SAMPLE_FACILITY)
-        profile = repository.create_profile(
-            name=f"{crop.name} · {facility.name}",
-            crop_id=crop.id,
-            facility_id=facility.id,
-            is_default=True,
-        )
-
-        pipeline = Pipeline(repository)
-        result = pipeline.store_samples(profile, build_samples(datetime.now(timezone.utc)))
+        profile = repository.create_profile(**EXAMPLE)
+        now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        rows = synthetic(now)
+        for row in rows:
+            repository.add_reading(profile.id, **row)
         session.commit()
-
-        print(f"profile  {profile.name} (id {profile.id})")
-        print(f"crop     {crop.name}  {crop.temperature_min}-{crop.temperature_max} °C, "
-              f"{crop.humidity_min}-{crop.humidity_max} %")
-        print(f"facility {facility.name}  {len(facility.equipment)} items, "
-              f"{facility.altitude_m:.0f} m")
-        print(f"rules    {len(repository.list_rules())}")
-        print(f"readings {result.stored} over the last {DAYS} days")
-        print()
-        print("Start the server with:  .venv/bin/python -m psychromol.api")
+        print(f"profile {profile.id} “{profile.name}” with {len(rows)} synthetic readings")
+        print("its default rules are added the first time it is opened in the browser")
     finally:
         session.close()
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

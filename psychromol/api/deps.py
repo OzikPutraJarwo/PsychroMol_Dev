@@ -3,13 +3,12 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from ..config import Settings, get_settings
+from ..db.models import Profile
 from ..db.repository import Repository
 from ..db.session import get_sessionmaker
-from ..pipeline import Pipeline
 
 
 def get_db() -> Iterator[Session]:
@@ -23,15 +22,19 @@ def get_db() -> Iterator[Session]:
     finally:
         session.close()
 
+
 def get_repository(session: Annotated[Session, Depends(get_db)]) -> Repository:
     return Repository(session)
 
-def get_pipeline(
-    repository: Annotated[Repository, Depends(get_repository)],
-) -> Pipeline:
-    return Pipeline(repository)
 
-SessionDep = Annotated[Session, Depends(get_db)]
 RepositoryDep = Annotated[Repository, Depends(get_repository)]
-PipelineDep = Annotated[Pipeline, Depends(get_pipeline)]
-SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+
+def get_profile(profile_id: int, repository: RepositoryDep) -> Profile:
+    profile = repository.get_profile(profile_id)
+    if profile is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no profile {profile_id}")
+    return profile
+
+
+ProfileDep = Annotated[Profile, Depends(get_profile)]

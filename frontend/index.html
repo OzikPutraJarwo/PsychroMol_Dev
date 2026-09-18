@@ -34,8 +34,12 @@
     <button class="nav-item" data-view="chart">
       <span class="icon">scatter_plot</span><span>Psychro</span>
     </button>
-    <button class="nav-item" data-view="data">
-      <span class="icon">table_rows</span><span>Data</span>
+    <div class="nav-label"><span class="icon">table_rows</span><span>Data</span></div>
+    <button class="nav-item sub" data-view="data-chart">
+      <span class="icon">show_chart</span><span>Chart</span>
+    </button>
+    <button class="nav-item sub" data-view="data-table">
+      <span class="icon">table</span><span>Table</span>
     </button>
     <button class="nav-item" data-view="rules">
       <span class="icon">rule</span><span>Rules</span>
@@ -43,17 +47,16 @@
   </nav>
   <div class="scrim" id="scrim"></div>
 
-  <main class="content">
+  <main class="content" id="content">
 
     <section class="view active" id="view-dashboard">
       <div class="cards" id="primary-cards"></div>
-      <h2 class="section-title">Action</h2>
-      <div id="action-panel"></div>
+      <div id="advice-panel"></div>
       <h2 class="section-title">Charts</h2>
       <div class="chart-columns">
         <div class="panel">
           <div class="panel-head">
-            <span id="mini-chart-title">Psychrometric</span>
+            <span class="row"><span id="mini-chart-title">Psychrometric</span><button class="help" data-help="topic:psychrometric-chart" id="mini-chart-help" aria-label="Reference">?</button></span>
             <div class="switch" id="mini-switch">
               <button class="on" data-kind="psychrometric">Psychrometric</button>
               <button data-kind="mollier">Mollier</button>
@@ -68,67 +71,86 @@
       </div>
     </section>
 
-    <section class="view" id="view-chart">
-      <div class="panel">
-        <div class="panel-head">
-          <div class="switch" id="full-switch">
-            <button class="on" data-kind="psychrometric">Psychrometric</button>
-            <button data-kind="mollier">Mollier</button>
+    <section class="view fill" id="view-chart">
+      <div class="psychro-layout">
+        <div class="panel fill-panel">
+          <div class="panel-head">
+            <div class="row">
+              <div class="switch" id="full-switch">
+                <button class="on" data-kind="psychrometric">Psychrometric</button>
+                <button data-kind="mollier">Mollier</button>
+              </div>
+              <button class="help" data-help="topic:psychrometric-chart" id="full-chart-help" aria-label="Reference">?</button>
+            </div>
+            <span class="hint inline">Scroll to zoom · drag to pan · hover to read</span>
+            <button class="ghost" id="chart-reset">
+              <span class="icon">restart_alt</span> Reset view
+            </button>
           </div>
-          <button class="ghost" id="chart-reset">
-            <span class="icon">restart_alt</span> Reset view
-          </button>
+          <div class="chart-fill"><div id="full-chart"></div></div>
+          <div class="row playback-row">
+            <button class="ghost" id="history-play">
+              <span class="icon">play_arrow</span> Play history
+            </button>
+            <input type="range" id="history-scrub" min="0" max="0" value="0">
+            <span class="hint inline" id="history-scrub-time"></span>
+          </div>
         </div>
-        <div class="chart-scroll"><div id="full-chart"></div></div>
-        <div class="row playback-row">
-          <button class="ghost" id="history-play">
-            <span class="icon">play_arrow</span> Play history
-          </button>
-          <input type="range" id="history-scrub" min="0" max="0" value="0">
-          <span class="hint" id="history-scrub-time"></span>
+        <div class="panel point-panel">
+          <div class="panel-head">
+            <span>Current point</span>
+            <span class="hint inline" id="point-time"></span>
+          </div>
+          <div class="point-list" id="point-detail"></div>
         </div>
-        <p class="hint">Scroll to zoom in, drag to pan; hover to read a point. Zooming out stops at the full chart. The shaded area is where this crop wants to be, and the trail is the last 24 hours.</p>
       </div>
-      <h2 class="section-title">Current point</h2>
-      <div id="point-detail"></div>
     </section>
 
-    <section class="view" id="view-data">
-      <div class="panel">
+    <section class="view fill" id="view-data-chart">
+      <div class="panel fill-panel">
         <div class="panel-head">
-          <div class="range-controls">
-            <div class="switch" id="range-switch">
-              <button class="on" data-hours="24">24 h</button>
-              <button data-hours="72">3 d</button>
-              <button data-hours="168">7 d</button>
-              <button data-custom="1">Custom</button>
-            </div>
-            <div class="custom-range" id="custom-range" hidden>
-              <input type="datetime-local" id="range-start">
-              <span>to</span>
-              <input type="datetime-local" id="range-end">
-              <button class="primary" id="range-apply">Apply</button>
-            </div>
-          </div>
+          <div class="range-host"></div>
           <div class="row">
-            <button class="ghost" id="columns-open">
+            <button class="ghost" data-open="columns">
               <span class="icon">tune</span> Columns
             </button>
-            <button class="primary" id="download-open">
+            <button class="primary" data-open="download">
               <span class="icon">download</span> Download
             </button>
           </div>
         </div>
-        <div class="chart-scroll"><div id="data-trend"></div></div>
-        <div class="table-scroll"><table id="data-table"></table></div>
-        <p class="hint" id="data-summary"></p>
+        <div class="chart-fill"><div id="data-trend"></div></div>
+      </div>
+    </section>
+
+    <section class="view fill" id="view-data-table">
+      <div class="panel fill-panel">
+        <div class="panel-head">
+          <div class="range-host"></div>
+          <div class="row">
+            <button class="ghost" data-open="columns">
+              <span class="icon">tune</span> Columns
+            </button>
+            <button class="primary" data-open="download">
+              <span class="icon">download</span> Download
+            </button>
+          </div>
+        </div>
+        <div class="table-fill" id="table-fill"><table id="data-table"></table></div>
+        <div class="pager">
+          <button class="icon-button" data-page="first" aria-label="First page"><span class="icon">first_page</span></button>
+          <button class="icon-button" data-page="previous" aria-label="Previous page"><span class="icon">chevron_left</span></button>
+          <span class="pager-text" id="pager-text"></span>
+          <button class="icon-button" data-page="next" aria-label="Next page"><span class="icon">chevron_right</span></button>
+          <button class="icon-button" data-page="last" aria-label="Last page"><span class="icon">last_page</span></button>
+        </div>
       </div>
     </section>
 
     <section class="view" id="view-rules">
       <div class="panel">
         <div class="panel-head">
-          <span>Rules run in order. The first matching rule sets the headline.</span>
+          <span class="row"><span id="rules-intro">Rules for this profile.</span><button class="help" data-help="topic:rules" aria-label="Reference">?</button></span>
           <div class="row">
             <button class="ghost" id="rules-reset">
               <span class="icon">restart_alt</span> Restore defaults
@@ -150,7 +172,7 @@
 </div>
 
 <div class="modal" id="rule-modal" hidden>
-  <div class="modal-card">
+  <div class="modal-card wide">
     <div class="modal-head">
       <h2 id="rule-modal-title">New rule</h2>
       <button class="icon-button" data-close><span class="icon">close</span></button>
@@ -195,6 +217,16 @@
         <button class="primary" id="connect-save">Connect</button>
       </div>
     </div>
+  </div>
+</div>
+
+<div class="modal top" id="reference-modal" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="reference-title">Reference</h2>
+      <button class="icon-button" data-close><span class="icon">close</span></button>
+    </div>
+    <div class="modal-body reference" id="reference-body"></div>
   </div>
 </div>
 

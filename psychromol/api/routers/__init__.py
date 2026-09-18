@@ -1,3 +1,3 @@
-from . import catalogue, data, profiles, rules
+from . import profiles, readings, rules, sources
 
-__all__ = ["catalogue", "data", "profiles", "rules"]
+__all__ = ["profiles", "readings", "rules", "sources"]

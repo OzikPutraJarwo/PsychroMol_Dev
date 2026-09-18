@@ -3,346 +3,285 @@
 ## What this is
 
 Psychrometric decision support for a greenhouse. A temperature and a humidity
-become the full moist-air state; user-editable rules turn that state into
-advice that names the values which triggered it.
+become the full moist-air state; that state is classified against the crop's
+bands; user-editable rules turn the classification into advice. Every number,
+threshold and recommendation names the source it rests on, behind a small **?**
+button.
 
-Optimise for correctness and for a grower reading the screen — not for feature
-count.
+**The browser does all of it.** The server keeps the database and fetches the
+JSON link on a schedule — nothing else. Optimise for correctness and for a
+grower reading the screen, not for feature count.
 
 ## Hard rules
 
 1. **This is rule-based, not AI.** No machine learning, no prediction, no
-   autonomous control. This extends to the Raspberry Pi actuators (fan, pump,
-   stepper): they are switched only by a person, from `/hardware/actuators` —
-   never by a rule. If automatic actuator control is ever wanted, that is a
-   deliberate rule-model change to raise with the user first, not something to
-   wire up quietly inside the hardware poll loop.
-2. **Never duplicate a psychrometric formula.** `psychromol/core/` is the only
-   place moist-air relations may live. The frontend draws; it does not
-   calculate. Chart geometry comes from the backend for this reason.
-3. **Never mix pressure units.** The engine works in **Pa**, the API in **kPa**.
-   Conversion happens only in `MoistAirState.to_api_dict()` and
-   `psychromol/core/units.py`. API field names carry their unit.
-4. **A reading is three things**: a time, a temperature, a humidity. Do not add
-   optional channels back. Soil moisture and light (from the Pi's MCP3008) are
-   *not* readings — they live only in `hardware.state.store`, in memory, never
-   in the `readings` table.
-5. **Pressure comes from the facility altitude**, never from a reading.
-   `psychromol/hardware/` has no pressure sensor for this reason; if one is
-   ever wired up, its value must still be discarded in favour of
-   `pressure_for(profile)`.
-6. **No comments in code**, except the ASHRAE equation citations in
-   `psychromol/core/` and in the tests that verify against ASHRAE.
-7. **English only.** No other language in the interface or the code.
+   autonomous control. PsychroMol advises; a person acts.
+2. **The engine lives in `frontend/js/psychro.js` and nowhere else.** No
+   psychrometric relation may be written a second time — not in the chart
+   geometry, not in the app, not in Python. `geometry.js` builds curves by
+   calling the engine; `dss.js` classifies values the engine returned. The
+   server never computes a psychrometric quantity at all.
+3. **Never mix pressure units.** The engine works in **Pa**; the API, the
+   database and the interface use **kPa**. Conversion happens only in
+   `frontend/js/units.js` and `psychromol/units.py`, and every API field name
+   carries its unit (`temperature_c`, `pressure_kpa`).
+4. **A reading is three things**: a time, a temperature, a humidity — plus a
+   pressure only when the JSON link carries one. Nothing else is stored. Do
+   not add derived columns back to `readings`: everything else is recomputed
+   in the browser, from these, on demand.
+5. **Temperature and humidity bands have no defaults.** The user enters them
+   with the reference they come from, and the API refuses a profile without
+   both (`ProfileIn`). Only the VPD band has a shipped default, per growth
+   stage, and it carries its citation in `dss.js`.
+6. **Everything the interface asserts carries a reference.** A formula, a band
+   or a recommendation is shown with a `?` that opens its source.
+   `references.js` holds the sources and the per-topic text; a rule keeps its
+   own free-text reference and the API refuses an empty one. When you add a
+   quantity, a band or a default rule, add its reference in the same commit.
+7. **No comments in code**, except the ASHRAE equation citations in
+   `frontend/js/psychro.js` and in the tests that verify against ASHRAE.
+8. **English only.** No other language in the interface or the code.
 
 ## Dependency direction
 
 ```
-api/ → pipeline.py → {db/, core/, rules.py, ingest.py}
-core/ → (standard library only)
-db/ → (no imports from quality, rules or api)
+app.js → {api.js, dss.js, geometry.js, quantities.js, fields.js, chart.js, trend.js, references.js}
+dss.js → {psychro.js, references.js, units.js}
+geometry.js → psychro.js
+quantities.js, fields.js → units.js
+psychro.js → (nothing)
+
+api/ → {db/, fetcher.py, schemas.py}
+fetcher.py → {fields.py, db/}
+fields.py → units.py
+db/ → (no imports from api or fetcher)
 ```
 
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                 # 388 tests
-.venv/bin/python scripts/verify_engine.py     # 31 ASHRAE checks
+node --test tests/js/                         # 53 tests: engine, geometry, DSS, field mapping
+node scripts/verify_engine.mjs                # 33 checks against ASHRAE and PsychroLib
+.venv/bin/python -m pytest -q                 # 77 tests: API, fetcher, scheduling, migration
+.venv/bin/ruff check psychromol tests scripts
 .venv/bin/python -m psychromol.api            # serve on :8888
-.venv/bin/python scripts/seed.py              # an example profile with data
+.venv/bin/python scripts/seed.py              # an example profile with synthetic readings
 ```
+
+The user starts the server themselves from a terminal. Do not leave one running.
 
 ## Where things are
 
 | Path | Contents |
 |---|---|
-| `psychromol/core/` | ASHRAE relations, `MoistAirState`, Mollier projection, chart geometry |
-| `psychromol/rules.py` | Metric vocabulary, condition evaluation, equipment gating |
-| `psychromol/defaults.py` | The 11 starting rules, and the sample crop and facility |
-| `psychromol/ingest.py` | JSON and CSV parsing, loose column matching |
-| `psychromol/pipeline.py` | Storing readings with their derived state, fetching sources |
-| `psychromol/db/` | `crops`, `facilities`, `profiles`, `readings`, `rules` |
-| `psychromol/api/` | Routers: catalogue, profiles, data, preview, rules, hardware |
-| `psychromol/hardware/` | Raspberry Pi drivers, in-memory sensor/actuator state, the poll loop |
-| `frontend/` | `app.js` (views), `chart.js` (psychrometric/Mollier), `trend.js`, `api.js` |
+| `frontend/js/psychro.js` | The ASHRAE engine: saturation, humidity ratio, dew point, wet bulb, enthalpy, volume, density, VPD |
+| `frontend/js/geometry.js` | Psychrometric and Mollier chart curves, target zone, projection |
+| `frontend/js/dss.js` | Growth stages with their VPD bands, classification, default rules, the live explanation |
+| `frontend/js/references.js` | Sources and the text behind every `?` |
+| `frontend/js/fields.js` | JSON Pointer paths, number and time parsing, field detection, extraction |
+| `frontend/js/quantities.js` | The displayable/exportable quantities, their units, decimals and topics |
+| `frontend/js/app.js` | Views, live loop, profile modal, rules, data table, export |
+| `psychromol/fields.py` | The server's copy of extraction only (mirrors `fields.js`, shared fixture) |
+| `psychromol/fetcher.py` | Fetching a JSON link and storing the reading, the due check |
+| `psychromol/db/` | `profiles`, `readings`, `rules`, and the v2 → v3 upgrade |
+| `psychromol/api/` | Routers: profiles, readings, rules, sources |
+
+## What runs where, and why
+
+Everything that can run in the browser does. Two things cannot:
+
+* **the database**, and
+* **collecting readings while no browser is open** — a greenhouse log must not
+  have holes because nobody had the page up. `poll_sources` in `api/app.py`
+  wakes every `POLL_TICK_SECONDS` (1 s) and `fetcher.is_due()` decides which
+  profiles have waited their own `poll_interval_seconds` since
+  `last_polled_at`, so a 1 s profile is never throttled by a 60 s one.
+
+The dashboard's live tick calls `POST /profiles/{id}/refresh` (fetch, extract,
+store, return the latest) rather than only reading, so a watched profile is as
+fresh as its interval; the background loop then sees `last_polled_at` and skips.
 
 ## Data model
 
-Five tables. A `Profile` joins a `Crop` and a `Facility`; `Reading` rows belong
-to a profile and carry both the raw pair and every derived quantity, so a
-stored row can be re-derived and compared.
+Three tables. A `Profile` holds the crop name, the growth stage, the bands with
+their references, the pressure choice and the JSON link with its field mapping.
+`Reading` holds the raw pair (and pressure when mapped). `Rule` belongs to one
+profile.
 
-Deleting a profile also deletes its crop and facility, but only if no other
-profile still references them (`Repository.delete_profile`) — the frontend
-never lets a user pick an existing crop/facility for a new profile, so in
-practice each profile owns its own pair and this keeps the catalogue from
-silently accumulating orphaned rows.
+Rules are **seeded by the browser**, not the server: `rules_seeded` is false
+until `app.js` PUTs `dss.defaultRules()` the first time that profile is opened.
+That is what keeps the default rules and their citations in one place, in JS.
 
-`GET /profiles` does not compute a reading count per profile. It used to run
-one `SELECT COUNT(*)` per profile on every list call; nothing in the interface
-needs that number, so don't reintroduce it without a reason.
+## Upgrading a database
 
-## Deployment
+`create_all()` runs `db/migrate.upgrade()` first. It is detection-based and
+idempotent: it looks at the `profiles` table, does nothing at version 3, and
+refuses anything older than 2 with a clear error.
 
-`frontend/` is a plain static site with no build step and no same-origin
-assumption — every asset path is relative (`css/style.css`, `js/app.js`,
-`../fonts/...`), and `frontend/js/api.js`'s `BASE` is read from
-`localStorage["psychromol.apiBase"]`, not hardcoded. This means the frontend
-can be hosted anywhere (a plain static host, `python -m http.server`, or the
-backend's own `StaticFiles(directory=frontend, html=True)` mount at `/` in
-`psychromol/api/app.py`) as long as it can reach the backend's `/api/v1`. On
-first load, `start()` in `app.js` probes the stored (or default) base with
-`api.probeBase()`; on failure it opens `#connect-modal` automatically so the
-user can type the server's address — the same modal reopens from the
-`#connect-btn` in the topbar at any time. Whichever origin the frontend is
-served from, `PSYCHROMOL_CORS_ORIGINS` on the backend must include it.
+The v2 → v3 upgrade **backs the file up first**
+(`psychromol.backup-<stamp>-v2.db`, via SQLite's backup API), then, in one
+explicit transaction with foreign keys off and a `foreign_key_check` before
+commit:
 
-A linked profile's `poll_interval_seconds` (default `DEFAULT_POLL_INTERVAL_SECONDS`
-in `db/models.py`, currently 60; set from the Data tab's "Fetch every" field,
-which doubles as the live-preview interval before saving) is *per-profile*,
-not a single global cadence — `poll_sources` in `api/app.py` wakes every
-`POLL_TICK_SECONDS` (1s) and `_is_due()` decides which profiles have actually
-waited long enough since their own `last_polled_at`, so one profile can poll
-every second while another stays at the default without the fast one being
-throttled by the slow one's cadence. The frontend mirrors this: `startLive()`
-sizes its own tick to `state.profile.poll_interval_seconds` and calls
-`api.refresh()` (fetch + parse + store), not just `api.current()` (read-only)
-— the dashboard is the thing actually driving "fetch and store while I'm
-watching," not merely displaying whatever the backend happened to store on
-its own. Adding this column to `Profile` needed a real migration path, since
-`create_all()` only creates missing *tables* — `db/session.py`'s
-`_add_missing_columns()` runs a `PRAGMA table_info` check and an `ALTER TABLE`
-for any SQLite column the current model expects but an existing database file
-predates; extend that function, not `create_all()` itself, for the next
-column added to an existing table.
+* each v2 profile becomes a v3 profile — crop name from `crops`, bands from its
+  growth stage, the stage mapped by name (`fruit development` → `flowering`,
+  anything unknown → `vegetative`);
+* a v2 reference that was one of this project's own placeholders (`PROVISIONAL…`,
+  `Migrated from this crop's earlier…`) becomes `MISSING_REFERENCE`, so nothing
+  reads as sourced when it is not;
+* pressure comes from the **last stored reading's** pressure: sea level →
+  `standard`, anything else → `fixed` at that value, so migrated numbers do not
+  shift (a facility altitude of 30 m stays 100.965 kPa). Eq. 3 is not
+  reimplemented in Python for this — hard rule 2;
+* a profile with a link gets the mapping `/timestamp`, `/temperature`,
+  `/humidity` — the names the v2 loose matcher tried first — so collection
+  continues without a gap; a link with other names shows a clear
+  `last_poll_error` until the user maps the fields;
+* readings keep their ids, times and measured values; the derived columns are
+  dropped and `decisions` with them;
+* tables from before v2 (`sensor_readings`, `greenhouses`, …) are left exactly
+  as they are. They belong to the user's old data, not to this schema.
 
-The Raspberry Pi runs the same backend, unmodified. `PSYCHROMOL_HOST=0.0.0.0`
-makes it reachable on the LAN; `PSYCHROMOL_HARDWARE_ENABLED=true` plus
-`PSYCHROMOL_HARDWARE_PROFILE_ID` turns on a second background poll loop
-(`poll_hardware` in `api/app.py`) that reads the SHT10 every
-`PSYCHROMOL_HARDWARE_POLL_SECONDS` and calls `Pipeline.store_samples` directly
-— in-process, the same pattern `poll_sources` already uses for `source_url`
-profiles. Pin numbers are all `PSYCHROMOL_PIN_*` env vars with defaults listed
-in `.env.example`; nothing in `psychromol/hardware/` hardcodes a pin. The
-`requirements-pi.txt` / `pyproject.toml`'s `pi` extra (RPi.GPIO, spidev,
-luma.oled) are **not** in the base `requirements.txt` — a dev machine must
-never need them to run the test suite, which is why every hardware import in
-`psychromol/hardware/drivers.py` is lazy (inside `__init__`, not at module
-top) and raises `HardwareError` instead of `ImportError` when missing.
+## The references system
 
-## Theme
+`references.js` exports `SOURCES` (ASHRAE 2017, PsychroLib, Mollier 1923,
+Shamshiri et al. 2018, Grange & Hand 1987, BC Ministry of Agriculture 2015) and
+`TOPICS` (one per formula, plus the band, classification, rules and chart
+topics). `cite(source, locator, quote)` builds a citation; a quote must be
+**verbatim** — they were checked against the source PDFs with a script that
+normalises whitespace and hyphenation. If you add a quote, check it the same
+way.
 
-White, clean, iOS-style glassmorphism — translucent surfaces
-(`background: var(--surface*)` + `backdrop-filter: blur(...)`) floating over a
-soft pastel gradient on `body`. Material Symbols Rounded icons throughout
-(`.icon`, bundled locally).
+`app.js` resolves `data-help="topic:… | band:… | stage:… | rule:…"` in one
+delegated capture-phase listener, so a `?` works anywhere, including inside a
+`<label>` (it calls `preventDefault`/`stopPropagation` so the label does not
+toggle its radio).
 
-**Light mode only, deliberately.** `:root { color-scheme: light; }` and no
-`@media (prefers-color-scheme: dark)` block. This was a second correction —
-the first pass shipped a solid green theme, corrected to light glass; a
-follow-up then shipped a dark variant for `prefers-color-scheme: dark`, which
-the person running this on a dark-mode OS did not want either. Don't
-reintroduce a dark block without being asked again.
+## The DSS
 
-## The profile modal
+Three indicators — temperature, humidity, VPD — each LOW / OPTIMAL / HIGH
+against a band whose limits count as inside. The combined label is
+`HOT + HUMID · LOW VPD`-style, or plain `OPTIMAL` when all three are in.
 
-One DOM shell (`#profile-modal-card`), three modes rendered entirely by JS —
-there is no static markup per mode. Header actions read left to right:
+A rule names the state it needs for each indicator (or `ANY`), a severity
+(`ok` / `warning` / `critical`), a recommendation, a reference and an order.
+Every matching rule is ranked worst-severity-first, then lowest order; the
+first is the headline and the rest are listed as "Also matched". The 11
+default rules cover all 27 combinations exactly once — a test asserts it.
 
-* **`edit`** — opened for the currently active profile (clicking the profile
-  chip when one is selected): `[title input] ... [Delete] [Switch profile]
-  [Close]`. Sidebar tabs are Crop / Facility / Data, each editing that
-  profile's *own* crop/facility directly (no catalogue browsing), each with
-  its own immediate "Save crop" / "Save facility" button. The modal title is
-  the profile's name, editable in place (saves on blur/Enter).
-* **`switch`** — a plain list of every profile plus "Add new profile". Row
-  click switches the active profile and closes the modal outright.
-  Deliberately no per-row edit/delete — those live in `edit` mode.
-  Deliberately no reading count (see above).
-* **`add`** — `[title input] ... [Create profile] [Close]`. Crop, Facility and
-  Data are three *plain forms with no save button of their own* — creation is
-  one atomic action from the single header button, not three separate ones.
-  All three tabs render into the DOM together the first time `add` mode opens
-  (`modalState.addRendered`) and are never re-rendered on tab switch, or
-  switching away from a tab the user had already filled in would wipe it.
-  "Create profile" reads all three via `collectCropForm()` /
-  `collectFacilityForm()` / `$("#src-url")`, regardless of which tab is
-  currently visible, then does `addCrop` → `addFacility` → `addProfile` in
-  sequence. On success the modal flips straight into `edit` mode for the new
-  profile, landing on Data, so a link or file can be added immediately.
+VPD defaults per stage: propagation 0.3–0.5 kPa, vegetative and
+flowering/fruiting 0.2–1.0 kPa, each with its citation and a note saying the
+source gives one range for the whole crop cycle. A profile may override them
+with its own band and reference.
 
-Fresh install (no profile at all) opens `add` directly; there is nothing to
-switch to yet.
+## Data source and field mapping
 
-## The Psychro page
+A profile's link is read as a JSON document and addressed with **JSON Pointer**
+(RFC 6901: `/feeds/0/sensors/air/t`). `fields.js` flattens the document, offers
+the numeric leaves for temperature/humidity/pressure and the time-like leaves
+for the time, and guesses by name (exact, then whole word, then substring —
+never substring-matching a candidate shorter than three characters, and never
+a key containing `outdoor`, `surface`, `dew`, `setpoint`, …).
 
-The chart itself (`/profiles/{id}/chart`) plus a "current point" tile grid
-below it (`#point-detail`), replacing what used to live on the dashboard as a
-separate "Air properties" grid. **Always visible, not collapsible** — an
-earlier pass put this behind a click like the dashboard's advice; that was
-reverted, since farmers want the numbers on screen, not another tap. The tiles
-are solid white (`var(--surface-solid)`, no blur) rather than the glass
-translucency used elsewhere, a deliberate visual distinction for this data-only
-section.
+The browser reads the link **directly** and falls back to
+`GET /sources/fetch?url=` only when the browser is blocked (CORS, mixed
+content). The server does its own extraction with `psychromol/fields.py`, which
+must agree with `fields.js` value for value:
+`tests/fixtures/extraction-cases.json` holds 22 cases and **both** test suites
+run them. Change one side and you change the fixture and both tests.
 
-* **The chart's target zone** is *computed by the backend*
-  (`_target_zone_points` in `psychromol/core/chart.py`), not drawn as a
-  decorative rectangle on the frontend — see hard rule 2. It is the crop's
-  `(temperature_min, temperature_max, humidity_min, humidity_max)`, bounded by
-  the same relative-humidity relation that draws the RH family, so the top and
-  bottom edges are real RH curves, not a straight-edged box. Drawn first, so
-  every other curve sits above it.
-* **The history trail** is the last 24 hours of readings (`Chart.setHistory`),
-  refetched by `refreshChartHistory()` on every live tick *while the Psychro
-  view is active* — the chart's static geometry (curves, target zone) is
-  fetched once per visit/kind-switch, not every 15 s.
-* **Hover** shows a crosshair with the raw axis-unit coordinates under the
-  cursor (a linear inverse via `ix()`/`iy()` — legitimate, not a psychrometric
-  calculation) unless the cursor is within 14 px of a history point, in which
-  case it snaps to that point and shows its actual measured values instead of
-  an interpolation.
-* **Playback** (`#history-play`, `#history-scrub`) steps a second marker
-  (`Chart.setPlaybackPoint`, drawn in `--warning` orange to stay distinct from
-  the `--accent` blue "Now" point) through `charts.full.historyRows` — the
-  same array the trail and hover already read, not a separate fetch. The
-  scrubber is the source of truth for "where we are"; `startPlayback()` just
-  drives it forward on a `setInterval`, and dragging it manually always calls
-  `stopPlayback()` first. Switching Mollier ↔ psychrometric or a live-tick
-  history refresh both call `stopPlayback()` — the chart instance underneath
-  either gets destroyed or its `historyRows` array replaced, so a playback
-  timer left running past either would reference stale indices.
+Times without a zone are read as UTC, on both sides. Epoch numbers are seconds
+below 10¹¹ and milliseconds above.
 
-## The Data page
+## Pressure
 
-Shows only `temperature` and `relative_humidity` by default
-(`state.dataColumns`, from `/meta`'s `default_display_fields`). The gear-style
-"Columns" button opens a picker over the full field list
-(`/meta`'s `fields`, sourced from `psychromol/api/routers/data.py`'s `FIELDS`)
-and both the trend chart's series and the table's columns are driven by
-whatever is chosen — never hardcoded. The choice persists in
-`localStorage["psychromol.columns"]`. The **download** modal is a separate,
-wider choice: it always offers the full field list regardless of what's
-currently displayed, defaulting its checkboxes to the display selection —
-"what you see" and "what you can export" are related but not the same control.
+Per profile: `standard` (101.325 kPa, ASHRAE Eq. 3 at sea level), `fixed` (a
+value the user enters) or `field` (a mapped value in the JSON, with its unit).
+In `field` mode a reading without a pressure falls back to the standard
+atmosphere and the interface says so (`standard-fallback`).
 
-## The rule model
+## The views
 
-```json
-{
-  "name": "Hot and humid",
-  "conditions": [
-    {"metric": "temperature", "operator": ">", "target": "temperature.max"},
-    {"metric": "relative_humidity", "operator": ">", "target": "relative_humidity.max"}
-  ],
-  "severity": "critical",
-  "recommendation": "Ventilate first, then cool.",
-  "requires_equipment": "roof_vent",
-  "priority": 12
-}
-```
-
-All conditions must hold. A condition compares a metric against a fixed `value`
-or against a crop `target` (`temperature.max`, `relative_humidity.min`, …) with
-an optional `offset`. Lower `priority` fires first; the first match gives the
-headline.
-
-Adding a metric means adding it to `METRICS` **and** to `metric_value()` in
-`psychromol/rules.py`, and to `FIELDS` in `api/routers/data.py` if it should be
-exportable.
+* **Dashboard** — three cards, then the advice card. Collapsed it shows only
+  the state, the rule's name and the recommendation; clicking it opens the
+  classification (value against band → state) and the live calculation
+  (p_ws → p_w → VPD) with a `?` on every line. `state.adviceOpen` holds the
+  open/closed state, so a live tick cannot snap it shut.
+* **Psychro** — chart (switchable to Mollier) and every derived property of
+  the current point, each with its `?`. The trail is the last 24 h, thinned by
+  the server to 1500 points; playback steps an orange marker through it.
+* **Data → Chart / Table** — the chosen quantities over a range, computed in
+  the browser. The table can also show the assessment columns (state, rule,
+  recommendation), worked out live with the current bands and rules — nothing
+  of the kind is stored any more.
+* **Rules** — the rules of the current profile, each with its reference.
+* **Download** — CSV or JSON, pages of 10 000 readings fetched and computed in
+  the browser, written with a Blob.
 
 ## Traps this project has already fallen into
 
-* **Single-letter column candidates match everything.** `"t"` is a substring of
-  `date_time` and of `status`. Loose header matching tries exact names first,
-  then whole words, then substrings, and never substring-matches a candidate
-  shorter than three characters.
-* **An SVG that is re-created loses pointer capture.** The chart keeps one
-  `<svg>` element and replaces only its children, or dragging breaks after the
-  first move.
-* **Chart points are not always in axis units.** An axis that declares
-  `scale_to_base` carries base-unit points; divide before plotting. The
-  psychrometric y-axis does this, the Mollier x-axis does not.
-* **A fixed-width chart inside a grid forces the page wider.** Grid and flex
-  children need `min-width: 0`, or the chart can never shrink to fit.
-* **Charts track their container's pixel width, not a CSS transform.**
-  `Chart`/`Trend` measure the host with `ResizeObserver` and set the SVG's
-  `width`/`viewBox` to that exact pixel value every render, so 1 SVG unit
-  always equals 1 CSS pixel — text stays a constant size regardless of width.
-  Stretching the SVG via `width: 100%` instead would scale the text along with
-  it, which is the opposite of what a legible chart needs. Height never
-  changes with width. Tick count is computed from the available plot width
-  (`plotWidth() / 65` for the x-axis) so labels thin out rather than overlap
-  as the container narrows — never a fixed tick count.
-* **A discarded chart instance must `destroy()`**, or its `ResizeObserver`
-  keeps firing into a dead object. Anywhere a `Chart`/`Trend` is replaced
-  (e.g. switching Mollier ↔ psychrometric), call `.destroy()` on the old one
-  first.
-* **`[hidden]` is only `display:none` until some other rule sets `display`.**
-  Any class that declares its own `display` (`.custom-range { display: flex
-  }`, `.modal { display: grid }`, and formerly a now-deleted `.advice` block)
-  wins the cascade over the attribute selector at equal specificity, silently
-  reappearing whenever `hidden` is set. A single `[hidden] { display: none
-  !important; }` rule covers every current and future case; don't patch
-  `.foo[hidden]` one class at a time.
-* **A collapsible section re-rendered on a live tick must read back whether it
-  was open before rebuilding its markup**, or it silently snaps shut under a
-  reader every `LIVE_MS`. This bit both the dashboard's advice and the Psychro
-  point-detail before either was made non-collapsible; there is no live
-  example of the pattern left in this codebase, but the fix — read
-  `!document.getElementById(...).hidden` before touching `innerHTML`, then
-  carry it into the new markup — applies to any future collapsible driven by
-  a periodic refresh.
-* **Two CSS custom properties can resolve to the same colour without either
-  declaration looking wrong on its own.** `--accent` and `--info` were both
-  `#0a84ff`; a two-line trend chart (temperature + humidity) rendered as one
-  indistinguishable blue line. Chart *series* colours are `--series-1`
-  through `--series-6` in `trend.js`'s `COLOURS`, deliberately **not** the
-  same tokens as the semantic status colours (`--ok`/`--info`/`--warning`/
-  `--critical`) — those are free to collide with each other or with a series
-  colour, since nothing ever shows two of them side by side as data lines.
-* **`/readings` and `/current` don't use the same unit convention for the same
-  quantity.** `/current` (a `MoistAirState.to_api_dict()`) hands back both a
-  base-SI and a display-unit field for things like humidity ratio
-  (`_kg_kg` and `_g_kg`); which one a chart point needs depends on whether
-  that axis declares `scale_to_base` (see the trap above). `/readings` only
-  ever returns the display-unit field. History points therefore plot directly
-  via `sx()/sy()` — never through `Chart.toAxis()`, which is for the backend
-  *chart geometry's* raw curve points specifically, not for reading rows.
-* **The mini dashboard chart is non-interactive but still gets the target
-  zone and grid**, since those come from `geometry.curves`/`drawGrid()`
-  regardless of the `interactive` flag — only `attach()` (drag/zoom/hover) is
-  skipped. Don't assume "non-interactive" means "static geometry only."
-* **A live-preview interval left running behind a hidden tab keeps hitting the
-  network.** The Data tab's JSON-link preview (`wireLivePreview` in `app.js`)
-  ticks on a `setInterval` that survives tab switches in `add` mode (all three
-  tabs stay mounted at once, see the profile modal notes above); `tick()`
-  checks `#tab-data`'s `active` class itself and skips the fetch rather than
-  relying on the interval being torn down. `stopPreview()` still runs on
-  every `renderDataTab()` call and on every path that closes `#profile-modal`
-  (`closeProfileModal()`, the generic `data-close`/backdrop handlers in
-  `wire()`) — miss one of those and a closed modal keeps polling a URL the
-  user never asked to save.
-* **Two static-serving strategies can't coexist without one shadowing the
-  other's asset paths.** `frontend/index.html`/`style.css` reference assets by
-  relative path (`css/style.css`, not `/static/css/style.css`) specifically so
-  the same `frontend/` folder works both standalone and mounted by FastAPI.
-  `psychromol/api/app.py` therefore mounts the whole directory at `/` with
-  `StaticFiles(html=True)` — not the old split of a `/static` mount plus a
-  separate `FileResponse` route for `/` — because a relative path from
-  `index.html` served at `/` only resolves correctly if its sibling files are
-  also served from `/`, not from `/static/`. The API routers are registered
-  before this mount, so `/api/v1/*` still wins the match.
-* **A hardware driver module must import cleanly with no hardware present.**
-  `psychromol/hardware/drivers.py` never imports `RPi.GPIO`, `spidev` or
-  `luma` at module level — each is imported inside the class that needs it,
-  caught, and re-raised as `HardwareError`. This is what lets the full test
-  suite (and `psychromol.hardware.drivers.Simulated*`) run on a dev machine
-  with none of `requirements-pi.txt` installed; a top-level import would make
-  `from psychromol.hardware import runtime` itself fail off-Pi.
+* **A round trip through the humidity ratio moves a measured value.** RH 60 %
+  came back as 59.999999999999993 and a reading exactly on the band limit
+  classified as LOW. `stateFromTemperatureRelativeHumidity` now keeps the
+  measured RH and computes `p_w = φ·p_ws` directly (Eq. 12/22); the state's
+  `relativeHumidity` is the number the sensor sent.
+* **ASHRAE's wet-bulb equations disagree at exactly 0 °C.** Eq. 33 (water) and
+  Eq. 35 (ice) meet with a step, so the humidity ratio of the "0 °C wet bulb"
+  line inverts to a few hundredths below zero — at 5 °C dry bulb, −0.35 °C.
+  PsychroLib does the same to 0.001 °C; it is the standard, not a bug. A test
+  pins it.
+* **Single-letter field names match everything.** `t` is inside `status` and
+  `date_time`. Name matching never substring-matches a candidate shorter than
+  three characters.
+* **Any positive number is a valid epoch.** Offering every number as a time
+  candidate made temperature look like a 1970 timestamp. A time candidate must
+  be an ISO string or an epoch in a plausible range.
+* **Lazily computed state properties still serialise.** `dewPoint` and
+  `wetBulb` are getters (each costs a bisection) on a frozen object, so a
+  1000-row export that only needs VPD never solves them; `JSON.stringify` and
+  spreading still see them.
+* **A chart that is re-created loses pointer capture.** `Chart` keeps one
+  `<svg>` and replaces only its children.
+* **A discarded chart must `destroy()`**, or its `ResizeObserver` keeps firing
+  into a dead object.
+* **Curve labels pile up at the plot edge.** Labels are drawn only where they
+  do not overlap one already placed (`roomFor` in `chart.js`), measured from
+  the label's own length.
+* **Grid and flex children need `min-width: 0`** (and `min-height: 0` in the
+  fit views), or a chart forces its parent wider or taller.
+* **`[hidden]` is only `display:none` until another rule sets `display`.** One
+  `[hidden] { display: none !important; }` covers every case.
+* **A live-preview interval behind a hidden tab keeps hitting the network.**
+  The preview tick checks that `#tab-data` is active and that the modal is
+  open; `stopPreview()` runs on every re-render and every path that closes the
+  profile modal.
+* **Two CSS custom properties can resolve to the same colour.** Series colours
+  are `--series-1…6`, never the status tokens.
+* **Two static-serving strategies can't coexist.** Relative asset paths only
+  resolve if the whole `frontend/` directory is mounted at `/`; the API
+  routers are registered first so `/api/v1/*` still wins.
+* **A CDP step that redeclares `const` throws before its first statement.**
+  When driving the interface from a script, wrap each step in an IIFE, and
+  make the harness report `exceptionDetails` — a silent SyntaxError looks
+  exactly like a broken feature.
+* **A headless browser reuses its cached CSS and JS.** A change that "did not
+  work" may simply not have been loaded: delete the browser profile directory
+  before a screenshot run. A native `confirm()` also blocks the page until a
+  dialog handler answers it, so stub `window.confirm` when driving deletes.
+
+## Theme
+
+White, clean, iOS-style glassmorphism — translucent surfaces over a soft pastel
+gradient, Material Symbols Rounded icons (`.icon`, bundled locally).
+
+**Light mode only, deliberately.** No `@media (prefers-color-scheme: dark)`
+block. The person using this runs a dark-mode OS and asked twice for light;
+don't reintroduce a dark block without being asked.
 
 ## Before you change anything
 
 ```bash
-.venv/bin/python scripts/verify_engine.py
+node scripts/verify_engine.mjs
+node --test tests/js/
 .venv/bin/python -m pytest -q
 ```

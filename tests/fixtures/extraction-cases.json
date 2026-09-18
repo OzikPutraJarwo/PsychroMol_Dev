@@ -1,0 +1,579 @@
+{
+  "about": "Shared by tests/js/fields.test.mjs and tests/test_fetcher.py: the browser preview and the server fetcher must read the same values from the same JSON.",
+  "cases": [
+    {
+      "name": "flat object with an ISO time in UTC",
+      "document": {
+        "timestamp": "2026-09-17T09:10:04Z",
+        "temperature": 27,
+        "humidity": 44.6
+      },
+      "mapping": {
+        "time": "/timestamp",
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:04.000Z",
+          "temperature_c": 27,
+          "relative_humidity_percent": 44.6,
+          "pressure_kpa": null
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "nested objects, an array index and epoch milliseconds",
+      "document": {
+        "device": {
+          "id": "gh-1"
+        },
+        "feeds": [
+          {
+            "created": 1789636204123,
+            "sensors": {
+              "air": {
+                "t": "24.5",
+                "rh": "81,2 %"
+              }
+            }
+          }
+        ]
+      },
+      "mapping": {
+        "time": "/feeds/0/created",
+        "temperature": "/feeds/0/sensors/air/t",
+        "humidity": "/feeds/0/sensors/air/rh",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:04.123Z",
+          "temperature_c": 24.5,
+          "relative_humidity_percent": 81.2,
+          "pressure_kpa": null
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "epoch seconds written as text",
+      "document": {
+        "ts": "1789636204",
+        "temp": 25,
+        "hum": 70
+      },
+      "mapping": {
+        "time": "/ts",
+        "temperature": "/temp",
+        "humidity": "/hum",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:04.000Z",
+          "temperature_c": 25,
+          "relative_humidity_percent": 70,
+          "pressure_kpa": null
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "no time field uses the time the reading was received",
+      "document": {
+        "temp": 25,
+        "hum": 70
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/temp",
+        "humidity": "/hum",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": 25,
+          "relative_humidity_percent": 70,
+          "pressure_kpa": null
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "a time without a zone is read as UTC",
+      "document": {
+        "time": "2026-09-17 16:10:04",
+        "temp": 25,
+        "hum": 70
+      },
+      "mapping": {
+        "time": "/time",
+        "temperature": "/temp",
+        "humidity": "/hum",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T16:10:04.000Z",
+          "temperature_c": 25,
+          "relative_humidity_percent": 70,
+          "pressure_kpa": null
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "a time with an offset converts to UTC",
+      "document": {
+        "time": "2026-09-17T16:10:04.5+07:00",
+        "temp": 25,
+        "hum": 70
+      },
+      "mapping": {
+        "time": "/time",
+        "temperature": "/temp",
+        "humidity": "/hum",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:04.500Z",
+          "temperature_c": 25,
+          "relative_humidity_percent": 70,
+          "pressure_kpa": null
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "fractional seconds are cut to milliseconds",
+      "document": {
+        "time": "2026-09-17T09:10:04.123987Z",
+        "temp": 25,
+        "hum": 70
+      },
+      "mapping": {
+        "time": "/time",
+        "temperature": "/temp",
+        "humidity": "/hum",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:04.123Z",
+          "temperature_c": 25,
+          "relative_humidity_percent": 70,
+          "pressure_kpa": null
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "a pressure in hPa becomes kPa",
+      "document": {
+        "time": "2026-09-17T09:10:04Z",
+        "temperature": 20,
+        "humidity": 50,
+        "baro": 1013.25
+      },
+      "mapping": {
+        "time": "/time",
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": "/baro",
+        "pressure_unit": "hPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:04.000Z",
+          "temperature_c": 20,
+          "relative_humidity_percent": 50,
+          "pressure_kpa": 101.325
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "a pressure in Pa becomes kPa",
+      "document": {
+        "temperature": 20,
+        "humidity": 50,
+        "pressure": "101325"
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": "/pressure",
+        "pressure_unit": "Pa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": 20,
+          "relative_humidity_percent": 50,
+          "pressure_kpa": 101.325
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "a missing temperature is an error",
+      "document": {
+        "humidity": 50
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/temp",
+        "humidity": "/humidity",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": null,
+          "relative_humidity_percent": 50,
+          "pressure_kpa": null
+        },
+        "error_fields": [
+          "temperature"
+        ]
+      }
+    },
+    {
+      "name": "text that is not a number is an error",
+      "document": {
+        "temperature": "n/a",
+        "humidity": 50
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": null,
+          "relative_humidity_percent": 50,
+          "pressure_kpa": null
+        },
+        "error_fields": [
+          "temperature"
+        ]
+      }
+    },
+    {
+      "name": "a true or false value is not a number",
+      "document": {
+        "temperature": true,
+        "humidity": 50
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": null,
+          "relative_humidity_percent": 50,
+          "pressure_kpa": null
+        },
+        "error_fields": [
+          "temperature"
+        ]
+      }
+    },
+    {
+      "name": "a JSON null is not a number",
+      "document": {
+        "temperature": 21,
+        "humidity": null
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": 21,
+          "relative_humidity_percent": null,
+          "pressure_kpa": null
+        },
+        "error_fields": [
+          "humidity"
+        ]
+      }
+    },
+    {
+      "name": "an unreadable time is an error",
+      "document": {
+        "timestamp": "yesterday",
+        "temperature": 21,
+        "humidity": 50
+      },
+      "mapping": {
+        "time": "/timestamp",
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": null,
+          "temperature_c": 21,
+          "relative_humidity_percent": 50,
+          "pressure_kpa": null
+        },
+        "error_fields": [
+          "time"
+        ]
+      }
+    },
+    {
+      "name": "an impossible calendar date is an error",
+      "document": {
+        "timestamp": "2026-02-30T00:00:00Z",
+        "temperature": 21,
+        "humidity": 50
+      },
+      "mapping": {
+        "time": "/timestamp",
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": null,
+          "temperature_c": 21,
+          "relative_humidity_percent": 50,
+          "pressure_kpa": null
+        },
+        "error_fields": [
+          "time"
+        ]
+      }
+    },
+    {
+      "name": "keys containing a slash or a tilde use JSON Pointer escapes",
+      "document": {
+        "a/b": {
+          "m~n": 21.5
+        },
+        "h": 60
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/a~1b/m~0n",
+        "humidity": "/h",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": 21.5,
+          "relative_humidity_percent": 60,
+          "pressure_kpa": null
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "an array at the top level",
+      "document": [
+        {
+          "t": 22,
+          "h": 55
+        }
+      ],
+      "mapping": {
+        "time": null,
+        "temperature": "/0/t",
+        "humidity": "/0/h",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": 22,
+          "relative_humidity_percent": 55,
+          "pressure_kpa": null
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "a negative value with a decimal comma",
+      "document": {
+        "temperature": "-3,5",
+        "humidity": 90
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": -3.5,
+          "relative_humidity_percent": 90,
+          "pressure_kpa": null
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "a number followed by its unit",
+      "document": {
+        "temperature": "27.0 °C",
+        "humidity": "44.6%"
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": 27,
+          "relative_humidity_percent": 44.6,
+          "pressure_kpa": null
+        },
+        "error_fields": []
+      }
+    },
+    {
+      "name": "an array index with a leading zero does not resolve",
+      "document": {
+        "list": [
+          20,
+          21
+        ],
+        "humidity": 50
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/list/01",
+        "humidity": "/humidity",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": null,
+          "relative_humidity_percent": 50,
+          "pressure_kpa": null
+        },
+        "error_fields": [
+          "temperature"
+        ]
+      }
+    },
+    {
+      "name": "a mapped pressure that is missing is an error",
+      "document": {
+        "temperature": 20,
+        "humidity": 50
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": "/pressure",
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": 20,
+          "relative_humidity_percent": 50,
+          "pressure_kpa": null
+        },
+        "error_fields": [
+          "pressure"
+        ]
+      }
+    },
+    {
+      "name": "scientific notation is not accepted as text",
+      "document": {
+        "temperature": "2.5e1",
+        "humidity": 50
+      },
+      "mapping": {
+        "time": null,
+        "temperature": "/temperature",
+        "humidity": "/humidity",
+        "pressure": null,
+        "pressure_unit": "kPa"
+      },
+      "received_at": "2026-09-17T09:10:06.500Z",
+      "expected": {
+        "reading": {
+          "measured_at": "2026-09-17T09:10:06.500Z",
+          "temperature_c": null,
+          "relative_humidity_percent": 50,
+          "pressure_kpa": null
+        },
+        "error_fields": [
+          "temperature"
+        ]
+      }
+    }
+  ]
+}

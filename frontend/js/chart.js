@@ -1,5 +1,11 @@
 const NS = "http://www.w3.org/2000/svg";
 
+const MIN_TICK_INTERVAL = 0.1;
+const Y_TICK_TARGET = 7;
+const MIN_FIT_HEIGHT = 220;
+const LABEL_CHAR_WIDTH = 5.4;
+const LABEL_GAP_Y = 13;
+
 let counter = 0;
 
 const CURVE_STYLE = {
@@ -20,23 +26,15 @@ function el(name, attrs = {}) {
   return node;
 }
 
-const QUANTITY_LABEL = {
-  dry_bulb_temperature: "Dry-bulb temperature",
-  humidity_ratio: "Humidity ratio",
-  mollier_ordinate: "Enthalpy",
-};
-
 function axisTitle(axis) {
-  const name = QUANTITY_LABEL[axis.quantity] || axis.quantity.replace(/_/g, " ");
-  const unit = axisUnit(axis);
-  return unit ? `${name} (${unit})` : name;
+  return `${axis.title} (${axis.unit})`;
 }
 
 function niceStep(span, target) {
   const raw = span / Math.max(1, target);
   const power = Math.pow(10, Math.floor(Math.log10(raw)));
   for (const factor of [1, 2, 2.5, 5, 10]) {
-    if (power * factor >= raw) return power * factor;
+    if (power * factor >= raw * (1 - 1e-9)) return power * factor;
   }
   return power * 10;
 }
@@ -55,14 +53,12 @@ function fmt(value, digits = 1) {
   return typeof value === "number" ? value.toFixed(digits) : "—";
 }
 
-function axisUnit(axis) {
-  return (axis.unit || "").replace(/\s*\(.*\)\s*$/, "").trim();
-}
 
 export class Chart {
   constructor(host, options = {}) {
     this.host = host;
-    this.height = options.height || 560;
+    this.fitHeight = Boolean(options.fitHeight);
+    this.height = (this.fitHeight && this.measureHeight()) || options.height || 560;
     this.width = this.measureWidth() || options.width || 880;
     this.pad = { top: 18, right: 74, bottom: 46, left: 20 };
     this.interactive = options.interactive !== false;
@@ -86,10 +82,17 @@ export class Chart {
     return Math.round(this.host.getBoundingClientRect().width);
   }
 
+  measureHeight() {
+    const height = Math.round(this.host.getBoundingClientRect().height);
+    return height > 0 ? Math.max(MIN_FIT_HEIGHT, height) : 0;
+  }
+
   handleResize() {
     const width = this.measureWidth();
-    if (width > 0 && width !== this.width) {
+    const height = this.fitHeight ? this.measureHeight() : this.height;
+    if (width > 0 && height > 0 && (width !== this.width || height !== this.height)) {
       this.width = width;
+      this.height = height;
       this.render();
     }
   }
@@ -100,33 +103,19 @@ export class Chart {
 
   setGeometry(geometry) {
     this.geometry = geometry;
-    const x = geometry.x_axis;
-    const y = geometry.y_axis;
+    const { x, y } = geometry;
     this.home = { x0: x.min, x1: x.max, y0: y.min, y1: y.max };
     this.view = { ...this.home };
     this.render();
   }
 
-  toAxis(raw, axis) {
-    const scale = axis.scale_to_base;
-    return scale ? raw / scale : raw;
-  }
-
-  setCurrent(current) {
-    if (!current || !this.geometry) {
-      this.point = null;
-      this.render();
-      return;
-    }
-    const mollier = this.geometry.mode === "mollier";
-    this.point = mollier
-      ? { x: current.humidity_ratio_g_kg, y: current.mollier_ordinate_kj_kg, label: "Now" }
-      : { x: current.temperature_c, y: current.humidity_ratio_kg_kg, label: "Now" };
+  setCurrent(point) {
+    this.point = point ? { ...point, label: "Now" } : null;
     this.render();
   }
 
-  setHistory(rows) {
-    this.historyRows = rows || [];
+  setHistory(points) {
+    this.historyRows = points || [];
     this.render();
   }
 
@@ -222,10 +211,13 @@ export class Chart {
     svg.appendChild(this.layer);
   }
 
+  xTickTarget() {
+    return Math.max(3, Math.round(this.plotWidth() / 65));
+  }
+
   drawGrid(svg) {
-    const xTarget = Math.max(3, Math.round(this.plotWidth() / 65));
-    const xt = ticks(this.view.x0, this.view.x1, xTarget);
-    const yt = ticks(this.view.y0, this.view.y1, 7);
+    const xt = ticks(this.view.x0, this.view.x1, this.xTickTarget());
+    const yt = ticks(this.view.y0, this.view.y1, Y_TICK_TARGET);
     const group = el("g");
 
     for (const value of xt) {
@@ -266,9 +258,16 @@ export class Chart {
 
   drawCurves(svg) {
     const group = el("g", { "clip-path": `url(#${this.clip})` });
-    const project = ([a, b]) =>
-      `${this.sx(this.toAxis(a, this.geometry.x_axis)).toFixed(2)},` +
-      `${this.sy(this.toAxis(b, this.geometry.y_axis)).toFixed(2)}`;
+    const project = ([a, b]) => `${this.sx(a).toFixed(2)},${this.sy(b).toFixed(2)}`;
+    const placed = [];
+    const roomFor = (x, y, text) => {
+      const width = text.length * LABEL_CHAR_WIDTH;
+      const clash = placed.some((spot) =>
+        Math.abs(spot.y - y) < LABEL_GAP_Y && x < spot.x + spot.width + 6 && spot.x < x + width + 6);
+      if (clash) return false;
+      placed.push({ x, y, width });
+      return true;
+    };
 
     for (const curve of this.geometry.curves) {
       if (curve.family !== "target_zone") continue;
@@ -300,11 +299,12 @@ export class Chart {
       );
       if (curve.label && curve.points.length) {
         const [ax, ay] = curve.points[curve.points.length - 1];
-        const x = this.sx(this.toAxis(ax, this.geometry.x_axis));
-        const y = this.sy(this.toAxis(ay, this.geometry.y_axis));
+        const x = this.sx(ax);
+        const y = this.sy(ay);
         if (
           x > this.pad.left && x < this.width - this.pad.right &&
-          y > this.pad.top && y < this.height - this.pad.bottom
+          y > this.pad.top && y < this.height - this.pad.bottom &&
+          roomFor(x, y, curve.label)
         ) {
           const label = el("text", {
             x: x + 3, y: y - 3, "font-size": 10, fill: "var(--faint)",
@@ -320,14 +320,7 @@ export class Chart {
   drawHistory(svg) {
     this.historyCoords = [];
     if (!this.historyRows.length) return;
-    const mollier = this.geometry.mode === "mollier";
-    const coords = [];
-    for (const row of this.historyRows) {
-      const x = mollier ? row.humidity_ratio_g_kg : row.temperature_c;
-      const y = mollier ? row.mollier_ordinate_kj_kg : row.humidity_ratio_g_kg;
-      if (typeof x !== "number" || typeof y !== "number") continue;
-      coords.push({ x, y, row });
-    }
+    const coords = this.historyRows.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
     if (coords.length < 2) return;
 
     const group = el("g", { "clip-path": `url(#${this.clip})` });
@@ -374,8 +367,8 @@ export class Chart {
   drawPoint(svg) {
     if (!this.point) return;
     if (typeof this.point.x !== "number" || typeof this.point.y !== "number") return;
-    const x = this.sx(this.toAxis(this.point.x, this.geometry.x_axis));
-    const y = this.sy(this.toAxis(this.point.y, this.geometry.y_axis));
+    const x = this.sx(this.point.x);
+    const y = this.sy(this.point.y);
     if (
       x < this.pad.left || x > this.width - this.pad.right ||
       y < this.pad.top || y > this.height - this.pad.bottom
@@ -409,7 +402,7 @@ export class Chart {
       "font-size": 12,
       fill: "var(--muted)",
     });
-    x.textContent = axisTitle(this.geometry.x_axis);
+    x.textContent = axisTitle(this.geometry.x);
     svg.appendChild(x);
 
     const yx = this.width - 10;
@@ -422,7 +415,7 @@ export class Chart {
       fill: "var(--muted)",
       transform: `rotate(-90 ${yx} ${yy})`,
     });
-    y.textContent = axisTitle(this.geometry.y_axis);
+    y.textContent = axisTitle(this.geometry.y);
     svg.appendChild(y);
   }
 
@@ -449,7 +442,17 @@ export class Chart {
       const py = (event.clientY - rect.top) * scale;
       const anchorX = this.ix(px);
       const anchorY = this.iy(py);
-      const factor = event.deltaY > 0 ? 1.18 : 1 / 1.18;
+      let factor = event.deltaY > 0 ? 1.18 : 1 / 1.18;
+      if (factor < 1) {
+        const smallestX = MIN_TICK_INTERVAL * this.xTickTarget();
+        const smallestY = MIN_TICK_INTERVAL * Y_TICK_TARGET;
+        factor = Math.max(
+          factor,
+          smallestX / (this.view.x1 - this.view.x0),
+          smallestY / (this.view.y1 - this.view.y0),
+        );
+        if (factor >= 1) return;
+      }
 
       const next = {
         x0: anchorX - (anchorX - this.view.x0) * factor,
@@ -526,7 +529,7 @@ export class Chart {
       const dist = Math.hypot(x - px, y - py);
       if (dist < nearestDist) {
         nearestDist = dist;
-        nearest = { x, y, row: point.row };
+        nearest = { x, y, point };
       }
     }
 
@@ -551,16 +554,7 @@ export class Chart {
         stroke: "var(--surface-solid)", "stroke-width": 1.6,
       })
     );
-    const row = nearest.row;
-    const lines = [
-      new Date(row.measured_at).toLocaleString([], {
-        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-      }),
-      `Temperature   ${fmt(row.temperature_c)} °C`,
-      `Humidity   ${fmt(row.relative_humidity_percent, 0)} %`,
-    ];
-    if (typeof row.vpd_kpa === "number") lines.push(`VPD   ${fmt(row.vpd_kpa, 2)} kPa`);
-    this.drawTooltip(nearest.x, nearest.y, lines);
+    this.drawTooltip(nearest.x, nearest.y, nearest.point.lines);
   }
 
   drawCrosshair(px, py) {
@@ -579,8 +573,8 @@ export class Chart {
     const xValue = this.ix(px);
     const yValue = this.iy(py);
     const lines = [
-      `${fmt(xValue, 1)} ${axisUnit(this.geometry.x_axis)}`,
-      `${fmt(yValue, 2)} ${axisUnit(this.geometry.y_axis)}`,
+      `${fmt(xValue, 1)} ${this.geometry.x.unit}`,
+      `${fmt(yValue, 2)} ${this.geometry.y.unit}`,
     ];
     this.drawTooltip(px, py, lines);
   }

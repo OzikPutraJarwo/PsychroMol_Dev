@@ -10,6 +10,7 @@ from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..config import Settings, get_settings
+from .migrate import upgrade
 from .models import Base
 
 __all__ = ["init_engine", "get_engine", "get_sessionmaker", "session_scope", "create_all"]
@@ -63,20 +64,10 @@ def get_sessionmaker() -> sessionmaker[Session]:
     assert _session_factory is not None
     return _session_factory
 
-def _add_missing_columns(engine: Engine) -> None:
-    with engine.connect() as connection:
-        columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(profiles)")}
-        if "poll_interval_seconds" not in columns:
-            connection.exec_driver_sql(
-                "ALTER TABLE profiles ADD COLUMN poll_interval_seconds INTEGER"
-            )
-            connection.commit()
-
 def create_all(engine: Engine | None = None) -> None:
     engine = engine or get_engine()
+    upgrade(engine)
     Base.metadata.create_all(engine)
-    if engine.url.get_backend_name() == "sqlite":
-        _add_missing_columns(engine)
 
 @contextmanager
 def session_scope() -> Iterator[Session]:

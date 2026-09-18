@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "psychromol"
-version = "1.0.0"
+version = "3.0.0"
 description = "Psychrometric decision support for greenhouse environment management"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,18 +33,12 @@ app = [
     "uvicorn[standard]>=0.32",
     "pydantic>=2.9",
     "sqlalchemy>=2.0",
-    "python-multipart>=0.0.9",
 ]
 dev = [
     "pytest>=8.3",
     "httpx>=0.27",
     "psychrolib>=2.5",
     "ruff>=0.6",
-]
-pi = [
-    "RPi.GPIO>=0.7.1",
-    "spidev>=3.6",
-    "luma.oled>=3.13",
 ]
 
 [project.urls]
@@ -67,6 +61,7 @@ pythonpath = ["."]
 filterwarnings = [
     "ignore::DeprecationWarning:starlette.*",
     "ignore::DeprecationWarning:httpx.*",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
 ]
 
 [tool.ruff]
@@ -75,12 +70,4 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
-# E501: line length is enforced by the formatter's 100 columns, not by lint.
-# C416: SQLAlchemy yields Row objects; dict() over them does not unpack the
-#       two selected columns into key/value pairs, so the comprehension is
-#       correct and dict() is a bug. Verified by the test suite.
-ignore = ["E501", "C416"]
-
-[tool.ruff.lint.per-file-ignores]
-# B007: a loop over field names asserting a property of each name.
-"tests/test_api.py" = ["B007"]
+ignore = ["E501"]

@@ -1,0 +1,9 @@
+{
+  "name": "psychromol",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/js/",
+    "verify": "node scripts/verify_engine.mjs"
+  }
+}

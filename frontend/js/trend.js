@@ -33,7 +33,8 @@ function dayLabel(date) {
 export class Trend {
   constructor(host, options = {}) {
     this.host = host;
-    this.height = options.height || 300;
+    this.fitHeight = Boolean(options.fitHeight);
+    this.height = (this.fitHeight && this.measureHeight()) || options.height || 300;
     this.width = this.measureWidth() || options.width || 880;
     this.pad = { top: 16, right: 54, bottom: 34, left: 52 };
     this.series = [];
@@ -49,10 +50,17 @@ export class Trend {
     return Math.round(this.host.getBoundingClientRect().width);
   }
 
+  measureHeight() {
+    const height = Math.round(this.host.getBoundingClientRect().height);
+    return height > 0 ? Math.max(200, height) : 0;
+  }
+
   handleResize() {
     const width = this.measureWidth();
-    if (width > 0 && width !== this.width) {
+    const height = this.fitHeight ? this.measureHeight() : this.height;
+    if (width > 0 && height > 0 && (width !== this.width || height !== this.height)) {
       this.width = width;
+      this.height = height;
       this.render();
     }
   }

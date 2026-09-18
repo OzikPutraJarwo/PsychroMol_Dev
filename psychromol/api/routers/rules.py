@@ -4,72 +4,42 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
 
-from ...defaults import DEFAULT_RULES
-from ...rules import EQUIPMENT, SEVERITIES, validate_conditions
-from ..deps import RepositoryDep
+from ..deps import ProfileDep, RepositoryDep
 from ..schemas import RuleIn
 
-router = APIRouter(prefix="/rules", tags=["rules"])
+router = APIRouter(tags=["rules"])
 
-def _check(payload: RuleIn) -> list[dict[str, Any]]:
-    conditions = [
-        {k: v for k, v in item.model_dump().items() if v is not None}
-        for item in payload.conditions
-    ]
-    problems = validate_conditions(conditions)
-    if payload.severity not in SEVERITIES:
-        problems.append(f"severity must be one of {', '.join(SEVERITIES)}")
-    if payload.requires_equipment and payload.requires_equipment not in EQUIPMENT:
-        problems.append(f"unknown equipment {payload.requires_equipment!r}")
-    if problems:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT, "; ".join(problems)
-        )
-    return conditions
 
-@router.get("")
-def list_rules(repository: RepositoryDep) -> list[dict[str, Any]]:
-    return [rule.to_dict() for rule in repository.list_rules()]
+@router.get("/profiles/{profile_id}/rules")
+def list_rules(profile: ProfileDep, repository: RepositoryDep) -> list[dict[str, Any]]:
+    return [rule.to_dict() for rule in repository.list_rules(profile.id)]
 
-@router.post("", status_code=status.HTTP_201_CREATED)
-def create_rule(payload: RuleIn, repository: RepositoryDep) -> dict[str, Any]:
-    conditions = _check(payload)
-    rule = repository.create_rule(
-        name=payload.name,
-        conditions=conditions,
-        severity=payload.severity,
-        recommendation=payload.recommendation,
-        requires_equipment=payload.requires_equipment,
-        priority=payload.priority,
-        enabled=payload.enabled,
-    )
-    return rule.to_dict()
 
-@router.put("/{rule_id}")
-def update_rule(
-    rule_id: int, payload: RuleIn, repository: RepositoryDep
-) -> dict[str, Any]:
-    conditions = _check(payload)
-    rule = repository.update_rule(
-        rule_id,
-        name=payload.name,
-        conditions=conditions,
-        severity=payload.severity,
-        recommendation=payload.recommendation,
-        requires_equipment=payload.requires_equipment,
-        priority=payload.priority,
-        enabled=payload.enabled,
-    )
+@router.put("/profiles/{profile_id}/rules")
+def replace_rules(
+    profile: ProfileDep, payload: list[RuleIn], repository: RepositoryDep
+) -> list[dict[str, Any]]:
+    rules = repository.replace_rules(profile, [rule.model_dump() for rule in payload])
+    return [rule.to_dict() for rule in rules]
+
+
+@router.post("/profiles/{profile_id}/rules", status_code=status.HTTP_201_CREATED)
+def create_rule(profile: ProfileDep, payload: RuleIn, repository: RepositoryDep) -> dict[str, Any]:
+    return repository.create_rule(profile.id, **payload.model_dump()).to_dict()
+
+
+def _rule(rule_id: int, repository: RepositoryDep):
+    rule = repository.get_rule(rule_id)
     if rule is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no rule {rule_id}")
-    return rule.to_dict()
+    return rule
 
-@router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+
+@router.put("/rules/{rule_id}")
+def update_rule(rule_id: int, payload: RuleIn, repository: RepositoryDep) -> dict[str, Any]:
+    return repository.update_rule(_rule(rule_id, repository), **payload.model_dump()).to_dict()
+
+
+@router.delete("/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_rule(rule_id: int, repository: RepositoryDep) -> None:
-    if not repository.delete_rule(rule_id):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"no rule {rule_id}")
-
-@router.post("/reset")
-def reset_rules(repository: RepositoryDep) -> list[dict[str, Any]]:
-    created = repository.replace_rules(DEFAULT_RULES)
-    return [rule.to_dict() for rule in created]
+    repository.delete_rule(_rule(rule_id, repository))
