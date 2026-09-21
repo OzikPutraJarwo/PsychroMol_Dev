@@ -34,3 +34,5 @@ data/real/*
 .idea/
 .DS_Store
 *.swp
+
+**/~$*
